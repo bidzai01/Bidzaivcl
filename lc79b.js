@@ -29,7 +29,6 @@ class AnhlakhoiGodAI {
         this.history = [];
         this.diceHistory = [];
         
-        // Trọng số cho tất cả pattern
         this.weights = {
             'cau_bet': 1.0, 'cau_dao_11': 1.0, 'cau_22': 1.0, 'cau_33': 1.0,
             'cau_121': 1.0, 'cau_123': 1.0, 'cau_321': 1.0,
@@ -58,17 +57,12 @@ class AnhlakhoiGodAI {
             'markov': 1.2
         };
         
-        // Hiệu suất pattern
         this.performance = {};
-        // Kết quả gần đây
         this.recentResults = [];
-        // Ngưỡng
         this.threshold = 55;
-        // Dự đoán trước
         this.lastPred = null;
         this.lastPatterns = [];
         
-        // Database
         this.faceFreq = {1:0,2:0,3:0,4:0,5:0,6:0};
         this.faceTrans = {};
         this.pairStats = {};
@@ -77,7 +71,6 @@ class AnhlakhoiGodAI {
         this.markovChain = {};
         this.betStats = {};
         
-        // Auto-Reversal
         this.reversalState = { active: false, consecutiveLosses: 0, reversalCount: 0 };
         this.REVERSAL_THRESHOLD = 3;
         this.winStreak = 0;
@@ -92,10 +85,8 @@ class AnhlakhoiGodAI {
         this.history.push({ result, total, dice: [d1,d2,d3] });
         this.diceHistory.push([d1,d2,d3]);
         
-        // Học mặt
         this.faceFreq[d1]++; this.faceFreq[d2]++; this.faceFreq[d3]++;
         
-        // Học chuyển đổi mặt
         if (this.history.length >= 2) {
             const prev = this.diceHistory[this.diceHistory.length-2];
             [d1,d2,d3].forEach((to, pos) => {
@@ -106,7 +97,6 @@ class AnhlakhoiGodAI {
             });
         }
         
-        // Học cặp
         if (d1===d2||d2===d3||d1===d3) {
             const k = d1===d2?`1-2:${d1}`:d2===d3?`2-3:${d2}`:`1-3:${d1}`;
             if (!this.pairStats[k]) this.pairStats[k] = {T:0,X:0,t:0};
@@ -120,7 +110,6 @@ class AnhlakhoiGodAI {
             this.tripleStats[k].t++;
         }
         
-        // Học tổng điểm
         if (this.history.length >= 2) {
             const prevT = this.history[this.history.length-2].total;
             const key = `${prevT}->${total}`;
@@ -131,7 +120,6 @@ class AnhlakhoiGodAI {
             else if (nextR==='X') this.scorePatterns[key].nextX++;
         }
         
-        // Học Markov
         const results = this._getResults();
         if (!this.markovChain['T->T']) this.markovChain = {'T->T':0,'T->X':0,'X->T':0,'X->X':0};
         if (results.length >= 2) {
@@ -139,7 +127,6 @@ class AnhlakhoiGodAI {
             this.markovChain[`${from}->${to}`]++;
         }
         
-        // Học bệt
         let streak = 1;
         for (let i = 1; i < results.length; i++) {
             if (results[i]===results[0]) streak++;
@@ -178,7 +165,6 @@ class AnhlakhoiGodAI {
             }
         };
 
-        // Tín hiệu mạnh
         const lastTotal = data[0]?.total || 0;
         if (lastTotal <= 4) add('T', 82, 'score_4', `Tổng ${lastTotal} → Tài`);
         if (lastTotal >= 17) add('X', 80, 'score_17', `Tổng ${lastTotal} → Xỉu`);
@@ -196,7 +182,6 @@ class AnhlakhoiGodAI {
             add('X', st&&st.t>=5?Math.round(st.X/st.t*100):68, 'pair6', 'Cặp 6 → Xỉu');
         }
 
-        // Bệt
         let streak = 1;
         for (let i = 1; i < R.length; i++) { if (R[i]===R[0]) streak++; else break; }
         if (streak >= 2) {
@@ -212,13 +197,11 @@ class AnhlakhoiGodAI {
             }
         }
 
-        // Cầu 1-1
         let alt = 1;
         for (let i = 1; i < R.length; i++) { if (R[i]!==R[i-1]) alt++; else break; }
         if (alt >= 4 && alt <= 6) add(R[0]==='T'?'X':'T', 62+alt, 'c11', `Cầu 1-1 (${alt})`);
         else if (alt >= 7) add(R[0]==='T'?'X':'T', 70+alt, 'c11_long', `Cầu 1-1 DÀI (${alt})`);
 
-        // Cầu 2-2, 3-3, 4-4
         for (const [sz, id] of [[2,'c22'],[3,'c33'],[4,'c44']]) {
             let cnt = 0;
             for (let i = 0; i < R.length-sz+1; i+=sz) {
@@ -231,7 +214,6 @@ class AnhlakhoiGodAI {
             }
         }
 
-        // Tam giác, Zigzag, Đối xứng
         if (R.length >= 5) {
             const l5 = R.slice(0,5);
             if (l5[0]!==l5[1]&&l5[1]!==l5[2]&&l5[2]!==l5[3]&&l5[3]!==l5[4]&&l5[0]===l5[4]) {
@@ -246,11 +228,9 @@ class AnhlakhoiGodAI {
             if (l.every((v,i)=>v===r[i]) && l[0]!==l[1]) add(l[2]==='T'?'X':'T', 66, 'doixung', 'Đối xứng');
         }
 
-        // Rồng, Dây gãy
         if (streak >= 6) add(R[0]==='T'?'X':'T', 75+streak, 'rong', `Rồng ${streak} → GÃY`);
         if (streak >= 5 && R[streak] && R[streak]!==R[0]) add(R[streak], 70+streak, 'daygay', `Dây gãy ${streak}`);
 
-        // Cầu đặc biệt
         if (R.length>=4 && R[0]!==R[1] && R[1]===R[2] && R[2]!==R[3] && R[0]===R[3]) add(R[0], 68, 'c121', '1-2-1');
         if (R.length>=6) {
             const [a,b,c,d,e,f] = R;
@@ -259,7 +239,6 @@ class AnhlakhoiGodAI {
             if (a===b&&b!==c&&c!==d&&d===e&&e===f&&a!==d) add(d, 66, 'c212', '2-1-2');
         }
 
-        // Xúc xắc
         const totalF = Object.values(this.faceFreq).reduce((a,b)=>a+b,0);
         if (totalF > 20) {
             let hot=1, hc=0, cold=1, cc=Infinity;
@@ -305,7 +284,6 @@ class AnhlakhoiGodAI {
             }
         }
 
-        // Kỹ thuật
         if (data.length >= 10) {
             const sums = data.slice(0,10).map(d=>d.total);
             const a5 = sums.slice(0,5).reduce((a,b)=>a+b,0)/5;
@@ -314,7 +292,6 @@ class AnhlakhoiGodAI {
             if (a5 < a10 - 1.5) add('T', 68, 'sum_trend', 'Tổng giảm → Tài');
         }
         
-        // Markov chain
         const currR = R[0];
         const t2t = this.markovChain['T->T'] || 0;
         const t2x = this.markovChain['T->X'] || 0;
@@ -336,7 +313,6 @@ class AnhlakhoiGodAI {
             }
         }
 
-        // Phân bố
         const tC = R.filter(r=>r==='T').length;
         const imb = Math.abs(tC-(R.length-tC))/R.length;
         if (imb > 0.12) add(tC<R.length/2?'T':'X', Math.round(58+imb*40), 'distribution', 'Phân bố lệch');
@@ -359,7 +335,6 @@ class AnhlakhoiGodAI {
         if (diff < 0.15) conf = Math.max(50, conf-10);
         if (signals.length >= 6 && diff > 0.3) conf = Math.min(92, conf+5);
         
-        // Auto-Reversal: nếu thua liên tiếp >= threshold thì đảo dự đoán
         if (this.loseStreak >= this.REVERSAL_THRESHOLD) {
             pred = pred === 'Tài' ? 'Xỉu' : 'Tài';
             conf = Math.max(50, conf - 10);
@@ -422,6 +397,24 @@ class AnhlakhoiGodAI {
             history: this.history.length
         };
     }
+
+    saveState() {
+        return {
+            weights: this.weights,
+            performance: this.performance,
+            threshold: this.threshold,
+            loseStreak: this.loseStreak
+        };
+    }
+
+    loadState(state) {
+        if (state) {
+            this.weights = { ...this.weights, ...state.weights };
+            this.performance = state.performance || {};
+            this.threshold = state.threshold || 55;
+            this.loseStreak = state.loseStreak || 0;
+        }
+    }
 }
 
 // ==================== KHỞI TẠO ====================
@@ -463,18 +456,8 @@ async function initializeData() {
   loadSessionsToPredictor(predictorMD5, sessionsStore.md5);
   
   const learningData = loadJSON(LEARNING_FILE, {});
-  if (learningData.hu) {
-    predictorHU.weights = { ...predictorHU.weights, ...learningData.hu.weights };
-    predictorHU.performance = learningData.hu.performance || {};
-    predictorHU.threshold = learningData.hu.threshold || 55;
-    predictorHU.loseStreak = learningData.hu.loseStreak || 0;
-  }
-  if (learningData.md5) {
-    predictorMD5.weights = { ...predictorMD5.weights, ...learningData.md5.weights };
-    predictorMD5.performance = learningData.md5.performance || {};
-    predictorMD5.threshold = learningData.md5.threshold || 55;
-    predictorMD5.loseStreak = learningData.md5.loseStreak || 0;
-  }
+  if (learningData.hu) predictorHU.loadState(learningData.hu);
+  if (learningData.md5) predictorMD5.loadState(learningData.md5);
   
   const histData = loadJSON(HISTORY_FILE, { hu: [], md5: [] });
   predictionHistory = histData;
@@ -602,4 +585,135 @@ function updateActualResults(type, predictor) {
 function saveAllData() {
   saveJSON(SESSIONS_FILE, sessionsStore);
   saveJSON(HISTORY_FILE, predictionHistory);
-  const learningState
+  const learningState = {
+    hu: predictorHU.saveState(),
+    md5: predictorMD5.saveState()
+  };
+  saveJSON(LEARNING_FILE, learningState);
+}
+
+// ==================== API ENDPOINTS ====================
+app.get('/lc79-hu', async (req, res) => {
+  await accumulateSession('hu', predictorHU, API_URL_HU);
+  if (!isReady.hu) {
+    return res.json({ status: 'accumulating', progress: `${sessionsStore.hu.length}/${MIN_SESSIONS}` });
+  }
+  
+  updateActualResults('hu', predictorHU);
+  const pred = predictAndRecord('hu', predictorHU);
+  if (!pred) {
+    return res.json({ error: 'Không thể dự đoán' });
+  }
+  
+  const latestSession = sessionsStore.hu[0];
+  res.json({
+    phien_truoc: {
+      Phien: latestSession.Phien,
+      Xuc_xac_1: latestSession.Xuc_xac_1,
+      Xuc_xac_2: latestSession.Xuc_xac_2,
+      Xuc_xac_3: latestSession.Xuc_xac_3,
+      Tong: latestSession.Tong,
+      Ket_qua: latestSession.Ket_qua
+    },
+    phien_hien_tai: {
+      Phien: pred.nextPhien,
+      Du_doan: pred.prediction,
+      Do_tin_cay: `${pred.confidence}%`
+    },
+    id: '@vuaoccac'
+  });
+});
+
+app.get('/lc79-md5', async (req, res) => {
+  await accumulateSession('md5', predictorMD5, API_URL_MD5);
+  if (!isReady.md5) {
+    return res.json({ status: 'accumulating', progress: `${sessionsStore.md5.length}/${MIN_SESSIONS}` });
+  }
+  
+  updateActualResults('md5', predictorMD5);
+  const pred = predictAndRecord('md5', predictorMD5);
+  if (!pred) {
+    return res.json({ error: 'Không thể dự đoán' });
+  }
+  
+  const latestSession = sessionsStore.md5[0];
+  res.json({
+    phien_truoc: {
+      Phien: latestSession.Phien,
+      Xuc_xac_1: latestSession.Xuc_xac_1,
+      Xuc_xac_2: latestSession.Xuc_xac_2,
+      Xuc_xac_3: latestSession.Xuc_xac_3,
+      Tong: latestSession.Tong,
+      Ket_qua: latestSession.Ket_qua
+    },
+    phien_hien_tai: {
+      Phien: pred.nextPhien,
+      Du_doan: pred.prediction,
+      Do_tin_cay: `${pred.confidence}%`
+    },
+    id: '@vuaoccac'
+  });
+});
+
+app.get('/lc79-hu/history', (req, res) => {
+  updateActualResults('hu', predictorHU);
+  res.json(predictionHistory.hu);
+});
+
+app.get('/lc79-md5/history', (req, res) => {
+  updateActualResults('md5', predictorMD5);
+  res.json(predictionHistory.md5);
+});
+
+app.get('/status', (req, res) => {
+  res.json({
+    hu: { 
+      sessions: sessionsStore?.hu?.length || 0, 
+      ready: isReady.hu,
+      stats: predictorHU.getStats()
+    },
+    md5: { 
+      sessions: sessionsStore?.md5?.length || 0, 
+      ready: isReady.md5,
+      stats: predictorMD5.getStats()
+    }
+  });
+});
+
+// ==================== KHỞI ĐỘNG ====================
+async function main() {
+  sessionsStore = await initializeData();
+  
+  isReady.hu = sessionsStore.hu.length >= MIN_SESSIONS;
+  isReady.md5 = sessionsStore.md5.length >= MIN_SESSIONS;
+  
+  console.log(`Trạng thái - HU: ${isReady.hu ? 'Sẵn sàng' : 'Đang tích lũy'}, MD5: ${isReady.md5 ? 'Sẵn sàng' : 'Đang tích lũy'}`);
+  
+  if (!isReady.hu || !isReady.md5) {
+    console.log('Bắt đầu tích lũy phiên để đạt 100...');
+    while (!isReady.hu || !isReady.md5) {
+      const tasks = [];
+      if (!isReady.hu) tasks.push(accumulateSession('hu', predictorHU, API_URL_HU));
+      if (!isReady.md5) tasks.push(accumulateSession('md5', predictorMD5, API_URL_MD5));
+      await Promise.all(tasks);
+      if (!isReady.hu || !isReady.md5) {
+        console.log(`Tiến độ: HU=${sessionsStore.hu.length}/${MIN_SESSIONS} MD5=${sessionsStore.md5.length}/${MIN_SESSIONS}`);
+        await new Promise(r => setTimeout(r, FETCH_INTERVAL));
+      }
+    }
+    console.log('Đã đủ 100 phiên! Bắt đầu dự đoán tự động.');
+  }
+  
+  setInterval(async () => {
+    await accumulateSession('hu', predictorHU, API_URL_HU);
+    await accumulateSession('md5', predictorMD5, API_URL_MD5);
+    updateActualResults('hu', predictorHU);
+    updateActualResults('md5', predictorMD5);
+    saveAllData();
+  }, AUTO_SAVE_INTERVAL);
+}
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 VuaOcCac God AI Server chạy tại cổng ${PORT}`);
+  main();
+});
