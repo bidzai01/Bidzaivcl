@@ -2,7 +2,7 @@
   "name": "lc79-prediction-server",
   "version": "1.0.0",
   "description": "Lau Cua 79 - Tai Xiu Prediction with Session Accumulator",
-  "main": "lc79b.js",
+  "main": "lc79.js",
   "scripts": {
     "start": "node lc79.js",
     "dev": "nodemon lc79.js"
