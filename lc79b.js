@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║  VUAOCCAC GOD AI - FULL 100+ THUẬT TOÁN - CHUYÊN NGHIỆP          ║
-// ║  Server luôn có dự đoán, kèm lịch sử thắng thua chi tiết         ║
+// ║  VUAOCCAC GOD AI - FULL 100+ THUẬT TOÁN - SIÊU CHUẨN             ║
+// ║  Tự động dự đoán - Thống kê thắng thua chi tiết - Học liên tục   ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 const fs = require('fs');
@@ -11,23 +11,19 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-/* ------------------------------------------------------------------ */
-/*  CẤU HÌNH                                                           */
-/* ------------------------------------------------------------------ */
+// ==================== CẤU HÌNH ====================
 const API_URL_HU  = 'https://wtx.tele68.com/v1/tx/sessions';
 const API_URL_MD5 = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
 const SESSIONS_FILE  = path.join(__dirname, 'vuaoccac_sessions.json');
 const LEARNING_FILE  = path.join(__dirname, 'vuaoccac_learning.json');
 const HISTORY_FILE   = path.join(__dirname, 'vuaoccac_history.json');
 
-const MIN_SESSIONS       = 100;       // số phiên tối thiểu để bắt đầu
-const FETCH_PER_REQUEST  = 100;       // lấy 100 phiên mỗi lần
-const FETCH_INTERVAL     = 2000;      // nghỉ 2 giây giữa các lần fetch
-const AUTO_SAVE_INTERVAL = 30000;     // tự động lưu mỗi 30 giây
+const MIN_SESSIONS       = 100;
+const FETCH_PER_REQUEST  = 100;
+const FETCH_INTERVAL     = 2000;
+const AUTO_SAVE_INTERVAL = 30000;
 
-/* ================================================================== */
-/*  1. TOÀN BỘ THUẬT TOÁN (KHÔNG CẮT BỚT)                             */
-/* ================================================================== */
+// ==================== 1. TOÀN BỘ THUẬT TOÁN (KHÔNG CẮT BỚT) ====================
 
 // ---------- Markov & thống kê ----------
 function predictMarkov(seq) {
@@ -595,31 +591,138 @@ class AnhlakhoiGodAI {
         const [d1,d2,d3]=lastDice,lastTotal=data[0]?.total||0,S=[];
         const add=(pred,conf,id,name)=>{if(conf>=this.threshold){const w=this.weights[id]||1.0,perf=this.performance[id];let adjW=w; if(perf&&perf.t>=10){const acc=perf.c/perf.t; if(acc<0.3)return; adjW=w*(0.3+acc*0.7);} S.push({pred,conf,weight:adjW,id,name});}};
 
-        // (Toàn bộ logic thu thập tín hiệu - đã có đầy đủ ở trên, giữ nguyên)
+        // 1. Tín hiệu mạnh
         if(lastTotal<=4)add('T',82,'score_low',`Tổng ${lastTotal} → Tài`);
         if(lastTotal>=17)add('X',80,'score_high',`Tổng ${lastTotal} → Xỉu`);
         if(d1===d2&&d2===d3){const k=`${d1},${d2},${d3}`,st=this.tripleStats[k]; add(d1>=4?'X':'T',st&&st.t>=3?Math.round(Math.max(st.T,st.X)/st.t*100):72,'triple',`3 mặt ${d1}`);}
         if(lastDice.filter(x=>x===1).length>=2){const st=this.pairStats['1-2:1']||this.pairStats['2-3:1']||this.pairStats['1-3:1']; add('T',st&&st.t>=5?Math.round(st.T/st.t*100):70,'pair1','Cặp 1 → Tài');}
         if(lastDice.filter(x=>x===6).length>=2){const st=this.pairStats['1-2:6']||this.pairStats['2-3:6']||this.pairStats['1-3:6']; add('X',st&&st.t>=5?Math.round(st.X/st.t*100):68,'pair6','Cặp 6 → Xỉu');}
 
-        // ... (toàn bộ các pattern còn lại giống hệt trong _collectSignals() của class trước đó)
-        // Để giữ code gọn, tôi đã lược bớt phần thân nhưng bạn phải chèn toàn bộ vào.
-        // Xem phần _collectSignals() đầy đủ từ các tin nhắn trước.
-        
+        // 2. Bệt
+        let streak=1; for(let i=1;i<R.length;i++){if(R[i]===R[0])streak++;else break;}
+        if(streak>=2){const bk=Math.min(streak,20),bd=this.betStats[bk];
+            if(streak<=3)add(R[0],60,`bet_${streak}`,`Bệt ${streak} → Tiếp`);
+            else if(streak<=5){const g=bd&&bd.t>=5?bd.gay/bd.t>0.5:false; add(g?(R[0]==='T'?'X':'T'):R[0],g?68:64,`bet_${streak}`,`Bệt ${streak} → ${g?'Gãy':'Tiếp'}`);}
+            else{const g=bd&&bd.t>=3?bd.gay/bd.t>0.6:true; add(g?(R[0]==='T'?'X':'T'):R[0],g?75+streak:66,`bet_${streak}`,`Bệt ${streak} → ${g?'GÃY':'Tiếp'}`);}
+        }
+
+        // 3. Cầu 1-1
+        let alt=1; for(let i=1;i<R.length;i++){if(R[i]!==R[i-1])alt++;else break;}
+        if(alt>=4&&alt<=6)add(R[0]==='T'?'X':'T',62+alt,'c11',`Cầu 1-1 (${alt})`);
+        else if(alt>=7)add(R[0]==='T'?'X':'T',70+alt,'c11_long',`Cầu 1-1 DÀI (${alt})`);
+
+        // 4. Cầu 2-2, 3-3, 4-4, 5-5
+        for(const [sz,id] of [[2,'c22'],[3,'c33'],[4,'c44'],[5,'c55']]){
+            let cnt=0; for(let i=0;i<R.length-sz+1;i+=sz){if(R.slice(i,i+sz).every(r=>r===R[i]))cnt++;else break;}
+            if(cnt>=1){const pred=cnt>=2?(R[(cnt-1)*sz]==='T'?'X':'T'):R[(cnt-1)*sz]; add(pred,65+cnt*5,id,`Cầu ${sz}-${sz} (${cnt} bộ)`);}
+        }
+
+        // 5. Tam giác, Zigzag, Đối xứng
+        if(R.length>=5){const l5=R.slice(0,5); if(l5[0]!==l5[1]&&l5[1]!==l5[2]&&l5[2]!==l5[3]&&l5[3]!==l5[4]&&l5[0]===l5[4])add(l5[0]==='T'?'X':'T',80,'tamgiac','Tam giác');}
+        let zig=0; for(let i=1;i<R.length;i++){if(R[i]!==R[i-1])zig++;else break;}
+        if(zig>=5)add(R[0]==='T'?'X':'T',65+zig*2,'zigzag',`Zigzag ${zig}`);
+        if(R.length>=6){const l=R.slice(0,3),r=R.slice(3,6).reverse(); if(l.every((v,i)=>v===r[i])&&l[0]!==l[1])add(l[2]==='T'?'X':'T',66,'doixung','Đối xứng');}
+
+        // 6. Rồng, Dây gãy
+        if(streak>=6)add(R[0]==='T'?'X':'T',75+streak,'rong',`Rồng ${streak} → GÃY`);
+        if(streak>=5&&R[streak]&&R[streak]!==R[0])add(R[streak],70+streak,'daygay',`Dây gãy ${streak} → Theo mới`);
+
+        // 7. Cầu đặc biệt
+        if(R.length>=4&&R[0]!==R[1]&&R[1]===R[2]&&R[2]!==R[3]&&R[0]===R[3])add(R[0],68,'c121','1-2-1');
+        if(R.length>=6){const[a,b,c,d,e,f]=R; if(b===c&&c!==d&&d!==e&&e===f)add(a,70,'c123','1-2-3'); if(a===b&&b===c&&d===e&&e===f&&a!==d)add(d,72,'c321','3-2-1'); if(a===b&&b!==c&&c!==d&&d===e&&e===f&&a!==d)add(d,66,'c212','2-1-2'); if(a!==b&&b===c&&c===d&&d!==e&&e===f)add(a,68,'c1221','1-2-2-1'); if(a===b&&b!==c&&c===d&&d!==e&&e===f&&a!==d)add(a,68,'c2112','2-1-1-2');}
+
+        // 8. Cầu nâng cao
+        if(R.length>=6){const skip=[]; for(let i=0;i<Math.min(R.length,12);i+=2)skip.push(R[i]); if(skip.length>=3){if(skip.slice(0,3).every(r=>r===skip[0]))add(skip[0],68,'nhaycoc','Nhảy cóc cùng màu'); else if(skip.slice(0,3).every((v,i,a)=>i===0||v!==a[i-1]))add(skip[0]==='T'?'X':'T',66,'nhaycoc','Nhảy cóc đảo');}}
+        if(R.length>=5){const t5=R.slice(0,5).filter(r=>r==='T').length; if(t5>=4)add('T',70,'nhipnghieng',`Nhịp nghiêng Tài (${t5}/5)`); else if(t5<=1)add('X',70,'nhipnghieng',`Nhịp nghiêng Xỉu (${5-t5}/5)`);}
+        if(R.length>=4){const t4=R.slice(0,4).filter(r=>r==='T').length; if(t4===3)add('X',68,'3van1','3 ván 1 (3T-1X)'); else if(t4===1)add('T',68,'3van1','3 ván 1 (3X-1T)');}
+        const betPat=this._analyzeCauBet(R); if(betPat&&betPat.length>=4){const before=R.slice(betPat.length,betPat.length+4),prevBet=this._analyzeCauBet(before); if(prevBet&&prevBet.type!==betPat.type)add(betPat.type==='T'?'X':'T',76,'becau','Bẻ cầu');}
+        for(let cycle=2;cycle<=6;cycle++){const st=this.cycleStats[cycle]; if(st&&st.count>=3){const next=st.next,total=Object.values(next).reduce((a,b)=>a+b,0); if(total>0){const pred=next['T']>next['X']?'T':'X',conf=Math.round(Math.max(next['T']||0,next['X']||0)/total*100); if(conf>=60){add(pred,conf,'chuky',`Chu kỳ ${cycle}`);break;}}}}
+        if(R.length>=6){for(let gap=2;gap<=3;gap++){let ok=true;const ref=R[0]; for(let i=0;i<Math.min(R.length,12);i+=(gap+1)){if(R[i]!==ref){ok=false;break;}} if(ok){add(ref,68,'gap',`Cầu gấp ${gap+1}`);break;}}}
+        let zz=0; for(let i=0;i<R.length-2;i++){if(R[i]!==R[i+1]&&R[i+1]!==R[i+2]&&R[i]===R[i+2])zz++;else break;} if(zz>=3)add(R[0]==='T'?'X':'T',65+zz*2,'ziczac',`Ziczac ${zz}`);
+        let pc=0; for(let i=0;i<R.length-1;i+=2){if(R[i]===R[i+1])pc++;else break;} if(pc>=2){const same=R[0]===R[2];add(same?R[0]:(R[0]==='T'?'X':'T'),65+pc*3,'doi',`Cầu đôi ${pc}`);}
+
+        // 9. Xúc xắc
+        const totalFaces=Object.values(this.faceFreq).reduce((a,b)=>a+b,0);
+        if(totalFaces>20){let hot=1,hc=0,cold=1,cc=Infinity; for(let f=1;f<=6;f++){if(this.faceFreq[f]>hc){hc=this.faceFreq[f];hot=f;} if(this.faceFreq[f]<cc){cc=this.faceFreq[f];cold=f;}} if(hot>=4)add('T',60,'face_hot',`Mặt nóng ${hot}`); if(cold<=3)add('X',58,'face_cold',`Mặt lạnh ${cold}`);}
+        for(let pos=0;pos<3;pos++){const from=lastDice[pos],trans=this.faceTrans[pos]?.[from]; if(trans){let best=1,bc=0,tot=0; for(let t=1;t<=6;t++){const c=trans[t]||0;tot+=c;if(c>bc){bc=c;best=t;}} if(tot>=10&&bc/tot>0.35)add(best>=4?'T':'X',Math.round(55+(bc/tot)*25),'face_trans',`Mặt ${pos+1}: ${from}→${best}`);}}
+        const pairs=[]; if(d1===d2)pairs.push(`1-2:${d1}`); if(d2===d3)pairs.push(`2-3:${d2}`); if(d1===d3)pairs.push(`1-3:${d1}`);
+        pairs.forEach(k=>{const st=this.pairStats[k]; if(st&&st.t>=5){const p=st.T/st.t; if(p>0.6)add('T',Math.round(p*100),'dice_pair',`Cặp ${k} → Tài`); else if(p<0.4)add('X',Math.round((1-p)*100),'dice_pair',`Cặp ${k} → Xỉu`);}});
+        if(data.length>=2){const prevT=data[1].total,key=`${prevT}->${lastTotal}`,sp=this.scorePatterns[key]; if(sp&&sp.c>=3){const tn=sp.nextT+sp.nextX; if(tn>=3){const p=sp.nextT/tn; if(p>0.6)add('T',Math.round(p*100),'dice_score',`Tổng ${key} → Tài`); else if(p<0.4)add('X',Math.round((1-p)*100),'dice_score',`Tổng ${key} → Xỉu`);}}}
+
+        // 10. Kỹ thuật
+        if(data.length>=10){const sums=data.slice(0,10).map(d=>d.total),a5=sums.slice(0,5).reduce((a,b)=>a+b,0)/5,a10=sums.reduce((a,b)=>a+b,0)/10; if(a5>a10+1.5)add('X',68,'sum_trend','Tổng tăng → Xỉu'); if(a5<a10-1.5)add('T',68,'sum_trend','Tổng giảm → Tài');}
+        const currR=R[0],t2t=this.markovChain['T->T']||0,t2x=this.markovChain['T->X']||0,x2t=this.markovChain['X->T']||0,x2x=this.markovChain['X->X']||0;
+        if(currR==='T'){const tot=t2t+t2x; if(tot>=10){const prob=t2t/tot; if(prob>0.55)add('T',Math.round(55+prob*20),'markov',`Markov: T→T ${Math.round(prob*100)}%`); else if(prob<0.45)add('X',Math.round(55+(1-prob)*20),'markov',`Markov: T→X ${Math.round((1-prob)*100)}%`);}}
+        else{const tot=x2t+x2x; if(tot>=10){const prob=x2x/tot; if(prob>0.55)add('X',Math.round(55+prob*20),'markov',`Markov: X→X ${Math.round(prob*100)}%`); else if(prob<0.45)add('T',Math.round(55+(1-prob)*20),'markov',`Markov: X→T ${Math.round((1-prob)*100)}%`);}}
+        const tC=R.filter(r=>r==='T').length,imb=Math.abs(tC-(R.length-tC))/R.length;
+        if(imb>0.12)add(tC<R.length/2?'T':'X',Math.round(58+imb*40),'distribution','Phân bố lệch');
+        if(R.length>=10){const l5=R.slice(0,5),p5=R.slice(5,10),tL=l5.filter(r=>r==='T').length,tP=p5.filter(r=>r==='T').length; if((tL>=4&&tP<=1)||(tL<=1&&tP>=4))add(tL>=4?'X':'T',78,'smartbet','Đảo xu hướng');}
+
+        // 11. Tích hợp tất cả thuật toán bổ sung
+        const histObj = data.map(d=>({result:d.Ket_qua,total:d.Tong,dice:[d.Xuc_xac_1,d.Xuc_xac_2,d.Xuc_xac_3]}));
+        const seq = R.join('');
+        const mkMulti = predictMarkov(seq); if(mkMulti) add(mkMulti.prediction==='T'?'T':'X',mkMulti.confidence,'markov_multi','Markov đa bậc');
+        const m1=markov1(R); if(m1)add(m1,60,'markov1','Markov bậc 1');
+        const m2=markov2(R); if(m2)add(m2,62,'markov2','Markov bậc 2');
+        const m3=markov3(R); if(m3)add(m3,64,'markov3','Markov bậc 3');
+        const freq= predictWeightedFrequency(histObj); if(freq)add(freq.prediction==='Tài'?'T':'X',freq.confidence,'weighted_freq','Tần suất có trọng số');
+        const cycle= predictCycle(seq); if(cycle)add(cycle.prediction==='Tài'?'T':'X',cycle.confidence,'predict_cycle','Chu kỳ');
+        const trend= predictTrend(histObj); if(trend)add(trend.prediction==='Tài'?'T':'X',trend.confidence,'predict_trend','Xu hướng');
+        const streakAI= predictStreak(histObj); if(streakAI)add(streakAI.prediction==='Tài'?'T':'X',streakAI.confidence,'predict_streak','Streak AI');
+        const bayes= predictBayes(histObj); if(bayes)add(bayes.prediction==='Tài'?'T':'X',bayes.confidence,'bayes','Bayes');
+        const fib= predictFibonacciByTotal(histObj); if(fib)add(fib.prediction==='Tài'?'T':'X',fib.confidence,'fibonacci_total','Fibonacci');
+        const pair= predictPair(histObj); if(pair)add(pair.prediction==='Tài'?'T':'X',pair.confidence,'predict_pair','Cặp xúc xắc');
+        const rsi= rsiPredict(R); if(rsi)add(rsi,65,'rsi','RSI');
+        const bollinger= bollingerPredict(R); if(bollinger)add(bollinger,60,'bollinger','Bollinger');
+        const macd= macdPredict(R); if(macd)add(macd,60,'macd','MACD');
+        const stoch= stochasticPredict(R); if(stoch)add(stoch,60,'stochastic','Stochastic');
+        const wr= williamsR(R); if(wr)add(wr,60,'williams_r','Williams %R');
+        const cci= cciPredict(R); if(cci)add(cci,60,'cci','CCI');
+        const entropy= entropyPrediction(R); if(entropy)add(entropy,60,'entropy','Entropy');
+        const lr= linearRegression(R); if(lr)add(lr,55,'linear_regression','Linear Regression');
+        const knn= knnPredict(R); if(knn)add(knn,55,'knn','KNN');
+        const dt= decisionTree(R); if(dt)add(dt,55,'decision_tree','Decision Tree');
+        const pm= patternMatching(R); if(pm)add(pm,55,'pattern_matching','Pattern Matching');
+        const zigzag= zigzagPredict(R); if(zigzag)add(zigzag,60,'zigzag_detect','Zigzag Detect');
+        for(const [name,detector] of Object.entries(PatternDetectors)){
+            const res=detector(R); if(res){const id=name.replace('detect_','pattern_'); add(res.pred,res.conf,id,res.name);}
+        }
+        const breakCount= countBreakSignals(R);
+        if(breakCount>=3)add(R[0]==='T'?'X':'T',60+breakCount*2,'break_signals',`Tín hiệu bẻ cầu (${breakCount})`);
+        const mdRes=this.markovDice.phanTich(); if(mdRes)add(mdRes.prediction==='Tài'?'T':'X',mdRes.confidence,'markov_xuc_xac','Markov xúc xắc');
+
         if(S.length===0)add(R[0]==='T'?'X':'T',52,'cau_tu_nhien','Cầu tự nhiên');
         return S;
     }
 
+    _analyzeCauBet(R){let s=1;for(let i=1;i<R.length;i++){if(R[i]===R[0])s++;else break;} return s>=2?{type:R[0],length:s}:null;}
+
     predict(){
-        if(this.history.length<10)return{action:'BỎ QUA',reason:'Cần ≥10 phiên'};
+        if(this.history.length<10)return{action:'CÂN NHẮC',prediction:this.history[this.history.length-1]?.result==='T'?'Xỉu':'Tài'||'Tài',confidence:51};
         const signals=this._collectSignals();
-        if(signals.length===0)return{action:'BỎ QUA',reason:'Không tín hiệu'};
-        let sT=0,sX=0; signals.forEach(s=>{if(s.pred==='T')sT+=s.conf*s.weight;else sX+=s.conf*s.weight;});
-        let pred=sT>=sX?'Tài':'Xỉu',conf=Math.round(Math.max(sT,sX)/(sT+sX)*100);
-        const diff=Math.abs(sT-sX)/(sT+sX); if(diff<0.15)conf=Math.max(50,conf-10); if(signals.length>=6&&diff>0.3)conf=Math.min(92,conf+5);
-        if(this.loseStreak>=this.REVERSAL_THRESHOLD){pred=pred==='Tài'?'Xỉu':'Tài';conf=Math.max(50,conf-10);}
+        if(signals.length===0)return{action:'CÂN NHẮC',prediction:this.history[this.history.length-1]?.result==='T'?'Xỉu':'Tài'||'Tài',confidence:51};
+
+        let sT=0,sX=0;
+        signals.forEach(s=>{if(s.pred==='T')sT+=s.conf*s.weight;else sX+=s.conf*s.weight;});
+
+        // Tránh kẹt 50%
+        if (sT === sX && sT === 0) {
+            sT = 0.001; sX = 0;
+        } else if (sT === sX) {
+            const totalT = this.history.filter(h=>h.result==='T').length;
+            const totalX = this.history.length - totalT;
+            if (totalT > totalX) sT += 0.001;
+            else sX += 0.001;
+        }
+
+        let pred=sT>=sX?'Tài':'Xỉu';
+        let conf=Math.round(Math.max(sT,sX)/(sT+sX)*100);
+        const diff=Math.abs(sT-sX)/(sT+sX);
+        if(diff<0.15)conf=Math.max(51,conf-10);
+        if(signals.length>=6&&diff>0.3)conf=Math.min(92,conf+5);
+        if(this.loseStreak>=this.REVERSAL_THRESHOLD){pred=pred==='Tài'?'Xỉu':'Tài';conf=Math.max(51,conf-10);}
         this.lastPred=pred; this.lastPatterns=signals.map(s=>s.id);
-        return{action:conf>=65?'ĐẶT':'CÂN NHẮC',prediction:pred,confidence:Math.max(50,Math.min(92,conf)),signals:signals.slice(0,5).map(s=>s.name),total:signals.length};
+        return{action:conf>=65?'ĐẶT':'CÂN NHẮC',prediction:pred,confidence:Math.max(51,Math.min(92,conf)),signals:signals.slice(0,5).map(s=>s.name),total:signals.length};
     }
 
     feedback(actual){
@@ -777,12 +880,19 @@ app.get('/lc79-hu', async (req, res) => {
     }
     const latestSession = sessionsStore.hu[0];
     const stats = predictorHU.getStats();
+    const recentHistory = predictionHistory.hu.filter(e => e.ket_qua !== null).slice(0, 10).map(e => ({
+        phien: e.phien,
+        du_doan: e.du_doan,
+        ket_qua: e.ket_qua,
+        danh_gia: e.danh_gia
+    }));
     res.json({
         phien_truoc: { Phien: latestSession.Phien, Xuc_xac_1: latestSession.Xuc_xac_1, Xuc_xac_2: latestSession.Xuc_xac_2, Xuc_xac_3: latestSession.Xuc_xac_3, Tong: latestSession.Tong, Ket_qua: latestSession.Ket_qua },
         phien_hien_tai: { Phien: pred.nextPhien, Du_doan: pred.prediction, Do_tin_cay: `${pred.confidence}%` },
         id: '@vuaoccac',
         stats,
-        history: predictionHistory.hu.slice(0, 10)
+        win_loss_table: recentHistory,
+        full_history_count: predictionHistory.hu.length
     });
 });
 
@@ -797,12 +907,19 @@ app.get('/lc79-md5', async (req, res) => {
     }
     const latestSession = sessionsStore.md5[0];
     const stats = predictorMD5.getStats();
+    const recentHistory = predictionHistory.md5.filter(e => e.ket_qua !== null).slice(0, 10).map(e => ({
+        phien: e.phien,
+        du_doan: e.du_doan,
+        ket_qua: e.ket_qua,
+        danh_gia: e.danh_gia
+    }));
     res.json({
         phien_truoc: { Phien: latestSession.Phien, Xuc_xac_1: latestSession.Xuc_xac_1, Xuc_xac_2: latestSession.Xuc_xac_2, Xuc_xac_3: latestSession.Xuc_xac_3, Tong: latestSession.Tong, Ket_qua: latestSession.Ket_qua },
         phien_hien_tai: { Phien: pred.nextPhien, Du_doan: pred.prediction, Do_tin_cay: `${pred.confidence}%` },
         id: '@vuaoccac',
         stats,
-        history: predictionHistory.md5.slice(0, 10)
+        win_loss_table: recentHistory,
+        full_history_count: predictionHistory.md5.length
     });
 });
 
