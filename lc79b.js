@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║  VUAOCCAC GOD AI - FULL 100+ THUẬT TOÁN - SIÊU CHUẨN             ║
-// ║  Tự động dự đoán - Thống kê thắng thua chi tiết - Học liên tục   ║
+// ║  VUAOCCAC GOD AI - NÂNG CẤP SIÊU CHUẨN - HỌC LIÊN TỤC           ║
+// ║  150+ PATTERN - TỰ ĐỘNG ĐIỀU CHỈNH - DỰ ĐOÁN CHÍNH XÁC           ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 const fs = require('fs');
@@ -23,7 +23,7 @@ const FETCH_PER_REQUEST  = 100;
 const FETCH_INTERVAL     = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 
-// ==================== 1. TOÀN BỘ THUẬT TOÁN (KHÔNG CẮT BỚT) ====================
+// ==================== 1. TOÀN BỘ THUẬT TOÁN (NÂNG CẤP - KHÔNG CẮT BỚT) ====================
 
 // ---------- Markov & thống kê ----------
 function predictMarkov(seq) {
@@ -528,7 +528,7 @@ function countBreakSignals(history) {
 }
 
 /* ================================================================== */
-/*  2. LỚP AnhlakhoiGodAI (SIÊU ĐẲNG CẤP)                             */
+/*  2. LỚP AnhlakhoiGodAI (NÂNG CẤP SIÊU CHUẨN)                      */
 /* ================================================================== */
 class AnhlakhoiGodAI {
     constructor() {
@@ -544,13 +544,20 @@ class AnhlakhoiGodAI {
             'predict_cycle':0.8,'predict_trend':0.9,'moving_avg_cross':0.7,'predict_streak':1.1,'bayes':0.9,'naive_bayes':0.8,
             'fibonacci_total':0.8,'fibonacci_fractal':0.7,'predict_pair':0.8,'rsi':0.9,'bollinger':0.8,'macd':0.8,'stochastic':0.7,'williams_r':0.7,'cci':0.7,'entropy':0.8,
             'linear_regression':0.8,'knn':0.8,'decision_tree':0.9,'pattern_matching':0.8,'zigzag_detect':0.9,'break_signals':1.0,
-            'pattern_11':0.8,'pattern_22':0.8,'pattern_33':0.8,'pattern_123':0.8,'pattern_triangle':0.9,'pattern_zigzag':0.8,'pattern_dragon':0.9,'pattern_tiger':0.9,'pattern_44':0.8,'pattern_55':0.8
+            'pattern_11':0.8,'pattern_22':0.8,'pattern_33':0.8,'pattern_123':0.8,'pattern_triangle':0.9,'pattern_zigzag':0.8,'pattern_dragon':0.9,'pattern_tiger':0.9,'pattern_44':0.8,'pattern_55':0.8,
+            // Trọng số cho pattern mới
+            'cau_3_2_1_var':0.9,'cau_tong_dac_biet':1.0,'cau_xuc_xac_vang':1.1,
+            'cau_bac_thang':0.9,'cau_dao_3':1.0,'cau_song_nguoc':1.0,
+            'cau_6_6':1.0,'cau_7_7':1.0,'cau_8_8':1.0
         };
         this.performance = {}; this.recentResults = []; this.threshold = 55; this.lastPred = null; this.lastPatterns = [];
         this.faceFreq={1:0,2:0,3:0,4:0,5:0,6:0}; this.faceTrans={}; this.pairStats={}; this.tripleStats={}; this.scorePatterns={};
         this.markovChain={'T->T':0,'T->X':0,'X->T':0,'X->X':0}; this.betStats={}; this.transitionMatrix={}; this.cycleStats={};
         this.winStreak=0; this.loseStreak=0; this.REVERSAL_THRESHOLD=3; this.reversalState={active:false,consecutiveLosses:0,reversalCount:0};
         this.markovDice = new MarkovXucXac123(3);
+        // Meta-learning
+        this.metaWeights = {};
+        this.patternAge = {};
     }
 
     addSession(s) {
@@ -582,6 +589,8 @@ class AnhlakhoiGodAI {
         for(let cycle=2;cycle<=6;cycle++){if(R.length>=cycle*2&&R.slice(0,cycle).join(',')===R.slice(cycle,cycle*2).join(',')){if(!this.cycleStats[cycle])this.cycleStats[cycle]={count:0,next:{}}; this.cycleStats[cycle].count++; const nxt=R[cycle]; this.cycleStats[cycle].next[nxt]=(this.cycleStats[cycle].next[nxt]||0)+1;}}
         this.markovDice.themDuLieu([d1,d2,d3]);
         if(this.history.length>2000){this.history.shift();this.diceHistory.shift();}
+        // Tăng tuổi cho tất cả pattern
+        for (let id in this.patternAge) this.patternAge[id]++;
     }
 
     _getResults(){return this.history.map(h=>h.result).reverse();}
@@ -589,7 +598,24 @@ class AnhlakhoiGodAI {
     _collectSignals(){
         const R=this._getResults(),data=this.history.slice().reverse(),lastDice=this.diceHistory[this.diceHistory.length-1]||[0,0,0];
         const [d1,d2,d3]=lastDice,lastTotal=data[0]?.total||0,S=[];
-        const add=(pred,conf,id,name)=>{if(conf>=this.threshold){const w=this.weights[id]||1.0,perf=this.performance[id];let adjW=w; if(perf&&perf.t>=10){const acc=perf.c/perf.t; if(acc<0.3)return; adjW=w*(0.3+acc*0.7);} S.push({pred,conf,weight:adjW,id,name});}};
+        const add=(pred,conf,id,name)=>{
+            if(conf>=this.threshold){
+                // Sử dụng meta weight nếu có
+                const metaW = this.metaWeights[id] || 1.0;
+                const w = (this.weights[id] || 1.0) * metaW;
+                const perf=this.performance[id];
+                let adjW=w;
+                if(perf && perf.t>=10){
+                    const acc=perf.c/perf.t;
+                    if(acc<0.3)return; // bỏ qua pattern yếu
+                    // Điều chỉnh theo tuổi: pattern cũ giảm trọng số
+                    const age = this.patternAge[id] || 0;
+                    const ageFactor = Math.max(0.5, 1.0 - age * 0.01);
+                    adjW = w * (0.3 + acc * 0.7) * ageFactor;
+                }
+                S.push({pred,conf,weight:adjW,id,name});
+            }
+        };
 
         // 1. Tín hiệu mạnh
         if(lastTotal<=4)add('T',82,'score_low',`Tổng ${lastTotal} → Tài`);
@@ -691,6 +717,47 @@ class AnhlakhoiGodAI {
         if(breakCount>=3)add(R[0]==='T'?'X':'T',60+breakCount*2,'break_signals',`Tín hiệu bẻ cầu (${breakCount})`);
         const mdRes=this.markovDice.phanTich(); if(mdRes)add(mdRes.prediction==='Tài'?'T':'X',mdRes.confidence,'markov_xuc_xac','Markov xúc xắc');
 
+        // Pattern mới:
+        if(R.length>=6){
+            const [a,b,c,d,e,f] = R;
+            // Cầu 3-2-1 biến thể ngược
+            if(a==='X'&&b==='X'&&c==='X'&&d==='T'&&e==='T'&&f==='X')add('T',70,'cau_3_2_1_var','3-2-1 biến thể');
+            // Cầu tổng đặc biệt
+            const sums = data.slice(0,3).map(d=>d.total);
+            if(sums.every(s=> s>=9 && s<=11)){
+                add(sums[0]>=10?'X':'T',68,'cau_tong_dac_biet','Tổng trung bình 3 phiên');
+            }
+            // Cầu xúc xắc vàng
+            const dicePat = data.slice(0,2).map(d=>d.Xuc_xac_1+d.Xuc_xac_2+d.Xuc_xac_3);
+            if(dicePat[0]===6 && dicePat[1]===15)add('X',75,'cau_xuc_xac_vang','Xúc xắc vàng 6->15');
+            // Cầu bậc thang
+            if(data.length>=4){
+                const s4 = data.slice(0,4).map(d=>d.total);
+                const inc = s4[0] < s4[1] && s4[1] < s4[2] && s4[2] < s4[3];
+                const dec = s4[0] > s4[1] && s4[1] > s4[2] && s4[2] > s4[3];
+                if(inc) add('X',70,'cau_bac_thang','Bậc thang tăng → Xỉu');
+                if(dec) add('T',70,'cau_bac_thang','Bậc thang giảm → Tài');
+            }
+            // Cầu đảo 3
+            if(R.length>=6 && R[0]===R[2] && R[1]===R[3] && R[2]===R[4] && R[3]===R[5] && R[0]!==R[1]){
+                add(R[0]==='T'?'X':'T',72,'cau_dao_3','Đảo 3 liên tiếp');
+            }
+            // Cầu sóng ngược
+            if(R.length>=6 && R[0]!==R[1]&&R[1]!==R[2]&&R[2]!==R[3]&&R[3]!==R[4]&&R[4]!==R[5]){
+                add(R[0]==='T'?'X':'T',68,'cau_song_nguoc','Sóng ngược');
+            }
+            // Cầu 6-6,7-7,8-8
+            for(let run=6; run<=8; run++){
+                if(R.slice(0,run).every(r=>r===R[0])){
+                    add(R[0]==='T'?'X':'T',75+run,`cau_${run}_${run}`,`Bệt ${run} → Gãy`);
+                    break;
+                }
+            }
+        }
+
+        // Cập nhật tuổi cho các pattern đã sử dụng
+        S.forEach(s => { this.patternAge[s.id] = 0; });
+
         if(S.length===0)add(R[0]==='T'?'X':'T',52,'cau_tu_nhien','Cầu tự nhiên');
         return S;
     }
@@ -706,9 +773,8 @@ class AnhlakhoiGodAI {
         signals.forEach(s=>{if(s.pred==='T')sT+=s.conf*s.weight;else sX+=s.conf*s.weight;});
 
         // Tránh kẹt 50%
-        if (sT === sX && sT === 0) {
-            sT = 0.001; sX = 0;
-        } else if (sT === sX) {
+        if (sT === sX && sT === 0) { sT = 0.001; sX = 0; }
+        else if (sT === sX) {
             const totalT = this.history.filter(h=>h.result==='T').length;
             const totalX = this.history.length - totalT;
             if (totalT > totalX) sT += 0.001;
@@ -730,14 +796,32 @@ class AnhlakhoiGodAI {
         const correct=this.lastPred===act;
         this.recentResults.push(correct); if(this.recentResults.length>50)this.recentResults.shift();
         if(correct){this.winStreak++;this.loseStreak=0;}else{this.loseStreak++;this.winStreak=0;}
+
         this.lastPatterns.forEach(id=>{
             if(!this.performance[id])this.performance[id]={c:0,t:0};
             this.performance[id].t++; if(correct)this.performance[id].c++;
-            const rate=this.performance[id].t>=10?this.performance[id].c/this.performance[id].t:0.5;
-            let w=this.weights[id]||1.0; if(rate>0.65)w=Math.min(3.0,w*1.15);else if(rate<0.35)w=Math.max(0.15,w*0.85);
+
+            const perf=this.performance[id];
+            const rate=perf.t>=10?perf.c/perf.t:0.5;
+            let w=this.weights[id]||1.0;
+            if(perf.t>=10){
+                if(rate>0.65) w=Math.min(3.0, w * 1.15);
+                else if(rate<0.35) w=Math.max(0.15, w * 0.85);
+            }
             this.weights[id]=w;
+
+            if(perf.t>=5){
+                const metaW = this.metaWeights[id] || 1.0;
+                if(rate>0.6) this.metaWeights[id] = Math.min(2.0, metaW * 1.05);
+                else if(rate<0.4) this.metaWeights[id] = Math.max(0.5, metaW * 0.95);
+            }
+            this.patternAge[id] = 0;
         });
-        if(this.recentResults.length>=10){const acc=this.recentResults.filter(r=>r).length/this.recentResults.length; this.threshold=acc>0.65?48:acc<0.45?62:55;}
+
+        if(this.recentResults.length>=10){
+            const acc=this.recentResults.filter(r=>r).length/this.recentResults.length;
+            this.threshold=acc>0.65?48:acc<0.45?62:55;
+        }
     }
 
     getStats(){
