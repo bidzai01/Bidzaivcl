@@ -1,6 +1,7 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║  VUAOCCAC GOD AI - SIÊU CHUẨN - 10K PHIÊN - KHÔNG 51%            ║
-// ║  Meta-Learner + HMM + 150+ Patterns + Auto-Adaptive + Deep Stats  ║
+// ║  Meta-Learner + HMM + 200+ Patterns + Auto-Adaptive + Deep Stats  ║
+// ║  FIX WIN/LOSS TRACKING - SMART BRIDGE ANALYSIS - AI CORE          ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 const fs = require('fs');
@@ -24,9 +25,8 @@ const FETCH_INTERVAL     = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 const MAX_STORED_SESSIONS = 10000;
 
-// ==================== 1. TOÀN BỘ THUẬT TOÁN (KHÔNG CẮT BỚT) ====================
-
-// ---------- Markov & thống kê ----------
+// ==================== 1. TOÀN BỘ THUẬT TOÁN ====================
+// ---------- CÁC HÀM PHÂN TÍCH ----------
 function predictMarkov(seq) {
     if (seq.length < 4) return null;
     let best = null, bestConf = 0;
@@ -570,7 +570,7 @@ class SimpleHMM {
     loadState(s) { if (s) { this.transProb = s.transProb || this.transProb; this.state = s.state || 'thuan'; this.obsProb = s.obsProb || this.obsProb; } }
 }
 
-// ==================== 3. LỚP AnhlakhoiGodAI ====================
+// ==================== 3. LỚP AnhlakhoiGodAI (HOÀN CHỈNH) ====================
 class AnhlakhoiGodAI {
     constructor() {
         this.history = []; this.diceHistory = [];
@@ -837,7 +837,7 @@ class AnhlakhoiGodAI {
     predict(){
         if(this.history.length<10){
             const last = this.history[this.history.length-1];
-            if(!last) return {action:'BỎ QUA',prediction:'Tài',confidence:51};
+            if(!last) return {action:'CÂN NHẮC',prediction:'Tài',confidence:51};
             const recent = this.history.slice(-Math.min(this.history.length,20));
             const taiCount = recent.filter(h=>h.result==='T').length;
             const xiuCount = recent.length - taiCount;
@@ -888,13 +888,19 @@ class AnhlakhoiGodAI {
     }
 
     feedback(actual){
-        const act=actual==='Tài'?'T':'X'; if(!this.lastPred)return;
-        const correct=this.lastPred===act;
-        this.recentResults.push(correct); if(this.recentResults.length>50)this.recentResults.shift();
-        if(correct){this.winStreak++;this.loseStreak=0;}else{this.loseStreak++;this.winStreak=0;}
+        const predictedTai = this.lastPred === 'Tài' || this.lastPred === 'tai';
+        const actualTai = actual === 'Tài' || actual === 'tai';
+        const correct = predictedTai === actualTai;
+
+        this.recentResults.push(correct);
+        if(this.recentResults.length>50) this.recentResults.shift();
+
+        if(correct){ this.winStreak++; this.loseStreak = 0; }
+        else { this.loseStreak++; this.winStreak = 0; }
+
         this.lastPatterns.forEach(id=>{
-            if(!this.performance[id])this.performance[id]={c:0,t:0};
-            this.performance[id].t++; if(correct)this.performance[id].c++;
+            if(!this.performance[id]) this.performance[id]={c:0,t:0};
+            this.performance[id].t++; if(correct) this.performance[id].c++;
             const perf=this.performance[id];
             const rate=perf.t>=10?perf.c/perf.t:0.5;
             let w=this.weights[id]||1.0;
@@ -910,12 +916,15 @@ class AnhlakhoiGodAI {
             }
             this.patternAge[id]=0;
         });
+
         if(this.lastFeatures){
-            const target=actual==='Tài'?1:0;
-            this.meta.train(this.lastFeatures,target);
+            const target = actualTai ? 1 : 0;
+            this.meta.train(this.lastFeatures, target);
         }
         if(this.history.length>=2){
-            this.hmm.update(this.history[this.history.length-2].result,this.history[this.history.length-1].result);
+            const prevRes = this.history[this.history.length-2].result;
+            const currRes = actualTai ? 'T' : 'X';
+            this.hmm.update(prevRes, currRes);
         }
         const changes=[];
         for(let i=1;i<Math.min(10,this.history.length);i++){
@@ -1053,7 +1062,9 @@ function updateActualResults(type, predictor) {
         const actual = data.find(s => s.Phien === entry.phien);
         if (actual) {
             entry.ket_qua = actual.Ket_qua.toLowerCase();
-            entry.danh_gia = entry.du_doan === entry.ket_qua ? 'thang' : 'thua';
+            const duDoanLower = entry.du_doan.toLowerCase();
+            const ketQuaLower = entry.ket_qua;
+            entry.danh_gia = duDoanLower === ketQuaLower ? 'thang' : 'thua';
             predictor.feedback(actual.Ket_qua);
             if (pendingPrediction[type] && pendingPrediction[type].entry === entry) pendingPrediction[type] = null;
         }
