@@ -1,6 +1,7 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║  VUAOCCAC GOD AI - SIÊU CHUẨN - 10K PHIÊN - KHÔNG 51%            ║
 // ║  Meta-Learner + HMM + 200+ Patterns + Deep Learning Core          ║
+// ║  FIXED: WIN/LOSS TRACKING - SMART BRIDGE ANALYSIS - AI CORE       ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 const fs = require('fs');
@@ -24,7 +25,7 @@ const FETCH_INTERVAL     = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 const MAX_STORED_SESSIONS = 10000;
 
-// ==================== 1. THUẬT TOÁN CƠ BẢN ====================
+// ==================== 1. THUẬT TOÁN CƠ BẢN (GIỮ NGUYÊN) ====================
 function predictMarkov(seq) {
     if (seq.length < 4) return null;
     let best = null, bestConf = 0;
@@ -470,7 +471,7 @@ class SimpleHMM {
     loadState(s) { if (s) { this.transProb = s.transProb || this.transProb; this.state = s.state || 'thuan'; this.obsProb = s.obsProb || this.obsProb; } }
 }
 
-// ==================== 3. LỚP AnhlakhoiGodAI (HOÀN CHỈNH) ====================
+// ==================== 3. LỚP AnhlakhoiGodAI (HOÀN CHỈNH, FIX WIN/LOSS) ====================
 class AnhlakhoiGodAI {
     constructor() {
         this.history = []; this.diceHistory = [];
@@ -729,36 +730,72 @@ class AnhlakhoiGodAI {
         return {action:conf>=65?'ĐẶT':'CÂN NHẮC',prediction:pred,confidence:Math.max(51,Math.min(92,conf))};
     }
 
-    feedback(actual){
-        const predictedTai = this.lastPred === 'Tài' || this.lastPred === 'tai';
-        const actualTai = actual === 'Tài' || actual === 'tai';
-        const correct = predictedTai === actualTai;
+    // ==================== FIX WIN/LOSS ====================
+    feedback(actual) {
+        // Chuẩn hóa dự đoán và thực tế về boolean
+        const predictionTai = (typeof this.lastPred === 'string') && (this.lastPred.toLowerCase() === 'tài');
+        const actualTai = (typeof actual === 'string') && (actual.toLowerCase() === 'tài');
+        const correct = predictionTai === actualTai;
+
+        // Luôn cập nhật kết quả
         this.recentResults.push(correct);
-        if(this.recentResults.length>50) this.recentResults.shift();
-        if(correct){ this.winStreak++; this.loseStreak = 0; } else { this.loseStreak++; this.winStreak = 0; }
-        this.lastPatterns.forEach(id=>{
-            if(!this.performance[id]) this.performance[id]={c:0,t:0};
-            this.performance[id].t++; if(correct) this.performance[id].c++;
-            const rate=this.performance[id].t>=10?this.performance[id].c/this.performance[id].t:0.5;
-            let w=this.weights[id]||1.0;
-            if(this.performance[id].t>=10){
-                if(rate>0.65) w=Math.min(3.0,w*1.15); else if(rate<0.35) w=Math.max(0.15,w*0.85);
-            }
-            this.weights[id]=w;
-            if(this.performance[id].t>=5){
-                const metaW=this.metaWeights[id]||1.0;
-                if(rate>0.6) this.metaWeights[id]=Math.min(2.0,metaW*1.05); else if(rate<0.4) this.metaWeights[id]=Math.max(0.5,metaW*0.95);
-            }
-            this.patternAge[id]=0;
-        });
-        if(this.lastFeatures){ const target = actualTai ? 1 : 0; this.meta.train(this.lastFeatures, target); }
-        if(this.history.length>=2){ this.hmm.update(this.history[this.history.length-2].result, actualTai?'T':'X'); }
-        const changes=[];
-        for(let i=1;i<Math.min(10,this.history.length);i++) changes.push(Math.abs(this.history[i].total-this.history[i-1].total));
-        this.volatility=changes.reduce((a,b)=>a+b,0)/changes.length/6;
-        if(this.recentResults.length>=10){
-            const acc=this.recentResults.filter(r=>r).length/this.recentResults.length;
-            this.threshold=acc>0.65?48:acc<0.45?62:50;
+        if (this.recentResults.length > 50) this.recentResults.shift();
+
+        // Cập nhật streak thắng/thua
+        if (correct) {
+            this.winStreak++;
+            this.loseStreak = 0;
+        } else {
+            this.loseStreak++;
+            this.winStreak = 0;
+        }
+
+        // Cập nhật hiệu suất pattern
+        if (this.lastPatterns && this.lastPatterns.length > 0) {
+            this.lastPatterns.forEach(id => {
+                if (!this.performance[id]) this.performance[id] = { c: 0, t: 0 };
+                this.performance[id].t++;
+                if (correct) this.performance[id].c++;
+                const rate = this.performance[id].t >= 10 ? this.performance[id].c / this.performance[id].t : 0.5;
+                let w = this.weights[id] || 1.0;
+                if (this.performance[id].t >= 10) {
+                    if (rate > 0.65) w = Math.min(3.0, w * 1.15);
+                    else if (rate < 0.35) w = Math.max(0.15, w * 0.85);
+                }
+                this.weights[id] = w;
+                if (this.performance[id].t >= 5) {
+                    const metaW = this.metaWeights[id] || 1.0;
+                    if (rate > 0.6) this.metaWeights[id] = Math.min(2.0, metaW * 1.05);
+                    else if (rate < 0.4) this.metaWeights[id] = Math.max(0.5, metaW * 0.95);
+                }
+                this.patternAge[id] = 0;
+            });
+        }
+
+        // Huấn luyện Meta-Learner
+        if (this.lastFeatures) {
+            const target = actualTai ? 1 : 0;
+            this.meta.train(this.lastFeatures, target);
+        }
+
+        // Cập nhật HMM
+        if (this.history.length >= 2) {
+            const prevRes = this.history[this.history.length - 2].result;
+            const currRes = actualTai ? 'T' : 'X';
+            this.hmm.update(prevRes, currRes);
+        }
+
+        // Cập nhật volatility
+        const changes = [];
+        for (let i = 1; i < Math.min(10, this.history.length); i++) {
+            changes.push(Math.abs(this.history[i].total - this.history[i - 1].total));
+        }
+        this.volatility = changes.reduce((a, b) => a + b, 0) / changes.length / 6;
+
+        // Điều chỉnh ngưỡng
+        if (this.recentResults.length >= 10) {
+            const acc = this.recentResults.filter(r => r).length / this.recentResults.length;
+            this.threshold = acc > 0.65 ? 48 : acc < 0.45 ? 62 : 50;
         }
     }
 
@@ -847,17 +884,44 @@ function predictAndRecord(type, predictor) {
     return pendingPrediction[type];
 }
 
+// ==================== FIX WIN/LOSS TRONG updateActualResults ====================
 function updateActualResults(type, predictor) {
-    const data = sessionsStore[type]; if (!data.length) return;
-    for (const entry of predictionHistory[type]) {
-        if (entry.ket_qua !== null) continue;
-        const actual = data.find(s => s.Phien === entry.phien);
-        if (actual) {
-            entry.ket_qua = actual.Ket_qua.toLowerCase();
-            entry.danh_gia = entry.du_doan.toLowerCase() === entry.ket_qua ? 'thang' : 'thua';
-            predictor.feedback(actual.Ket_qua);
-            if (pendingPrediction[type] && pendingPrediction[type].entry === entry) pendingPrediction[type] = null;
+    const data = sessionsStore[type];
+    if (!data || !data.length) return;
+    
+    // Duyệt từng entry trong lịch sử
+    for (let i = 0; i < predictionHistory[type].length; i++) {
+        const entry = predictionHistory[type][i];
+        
+        // Chỉ xử lý entry chưa có kết quả
+        if (entry.ket_qua !== null && entry.ket_qua !== undefined && entry.ket_qua !== '') continue;
+        
+        // Tìm phiên thực tế
+        const actualSession = data.find(s => s.Phien === entry.phien);
+        if (!actualSession) continue;
+        
+        // Cập nhật kết quả thực tế
+        entry.ket_qua = actualSession.Ket_qua.toLowerCase();
+        
+        // So sánh CHÍNH XÁC: du_doan vs ket_qua
+        const duDoan = entry.du_doan ? entry.du_doan.toLowerCase().trim() : '';
+        const ketQua = entry.ket_qua ? entry.ket_qua.toLowerCase().trim() : '';
+        
+        // Gán kết quả thắng/thua
+        entry.danh_gia = (duDoan === ketQua) ? 'thang' : 'thua';
+        
+        // Feedback cho predictor
+        predictor.feedback(actualSession.Ket_qua);
+        
+        // Xóa pending nếu có
+        if (pendingPrediction[type] && pendingPrediction[type].entry === entry) {
+            pendingPrediction[type] = null;
         }
+    }
+    
+    // Giới hạn lịch sử
+    if (predictionHistory[type].length > 100) {
+        predictionHistory[type] = predictionHistory[type].slice(0, 100);
     }
 }
 
@@ -867,11 +931,12 @@ function saveAllData() {
     saveJSON(LEARNING_FILE, { hu: predictorHU.saveState(), md5: predictorMD5.saveState() });
 }
 
+// ==================== 5. ENDPOINTS ====================
 app.get('/lc79-hu', async (req, res) => {
     await accumulateSession('hu', predictorHU, API_URL_HU);
     if (!isReady.hu) return res.json({ status: 'accumulating', progress: `${sessionsStore.hu.length}/${MIN_SESSIONS}` });
     updateActualResults('hu', predictorHU);
-    let pred = predictAndRecord('hu', predictorHU) || { nextPhien: sessionsStore.hu[0]?.Phien + 1 || 0, prediction: 'Tài', confidence: 51 };
+    let pred = predictAndRecord('hu', predictorHU) || { nextPhien: (sessionsStore.hu[0]?.Phien || 0) + 1, prediction: 'Tài', confidence: 51 };
     const latestSession = sessionsStore.hu[0] || {};
     const stats = predictorHU.getStats();
     const recentHistory = predictionHistory.hu.filter(e => e.ket_qua !== null).slice(0, 10).map(e => ({ phien: e.phien, du_doan: e.du_doan, ket_qua: e.ket_qua, danh_gia: e.danh_gia }));
@@ -882,7 +947,7 @@ app.get('/lc79-md5', async (req, res) => {
     await accumulateSession('md5', predictorMD5, API_URL_MD5);
     if (!isReady.md5) return res.json({ status: 'accumulating', progress: `${sessionsStore.md5.length}/${MIN_SESSIONS}` });
     updateActualResults('md5', predictorMD5);
-    let pred = predictAndRecord('md5', predictorMD5) || { nextPhien: sessionsStore.md5[0]?.Phien + 1 || 0, prediction: 'Tài', confidence: 51 };
+    let pred = predictAndRecord('md5', predictorMD5) || { nextPhien: (sessionsStore.md5[0]?.Phien || 0) + 1, prediction: 'Tài', confidence: 51 };
     const latestSession = sessionsStore.md5[0] || {};
     const stats = predictorMD5.getStats();
     const recentHistory = predictionHistory.md5.filter(e => e.ket_qua !== null).slice(0, 10).map(e => ({ phien: e.phien, du_doan: e.du_doan, ket_qua: e.ket_qua, danh_gia: e.danh_gia }));
@@ -893,6 +958,7 @@ app.get('/lc79-hu/history', (req, res) => { updateActualResults('hu', predictorH
 app.get('/lc79-md5/history', (req, res) => { updateActualResults('md5', predictorMD5); res.json(predictionHistory.md5); });
 app.get('/status', (req, res) => res.json({ hu: { sessions: sessionsStore?.hu?.length || 0, ready: isReady.hu, stats: predictorHU.getStats() }, md5: { sessions: sessionsStore?.md5?.length || 0, ready: isReady.md5, stats: predictorMD5.getStats() } }));
 
+// ==================== 6. KHỞI ĐỘNG ====================
 async function main() {
     await initializeData();
     isReady.hu = sessionsStore.hu.length >= MIN_SESSIONS;
