@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║  VUAOCCAC GOD AI - OPTIMIZED - SIÊU CHUẨN - TỶ LỆ THẮNG CAO      ║
-// ║  Tập trung vào tín hiệu mạnh + Ensemble thông minh               ║
+// ║  VUAOCCAC GOD AI - OPTIMIZED - SIÊU CHUẨN - BẮT MỌI LOẠI CẦU    ║
+// ║  Tập trung vào tín hiệu mạnh + Ensemble thông minh + Học nhanh   ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 const fs = require('fs');
@@ -23,7 +23,7 @@ const FETCH_INTERVAL     = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 const MAX_STORED_SESSIONS = 10000;
 
-// ==================== 1. CÁC HÀM PHÂN TÍCH CƠ BẢN ====================
+// ==================== 1. THUẬT TOÁN CƠ BẢN (NHANH, MẠNH) ====================
 function predictMarkov(seq) {
     if (seq.length < 4) return null;
     let best = null, bestConf = 0;
@@ -104,29 +104,99 @@ function decisionTree(history) {
     return last1;
 }
 
+// Pattern detectors mở rộng
 const PatternDetectors = {
     detect_1_1: (history) => {
         if (history.length >= 4 && history.slice(-4).join('') === "TXTX") return { pred: 'X', conf: 88, name: "Cầu 1-1" };
         if (history.length >= 4 && history.slice(-4).join('') === "XTXT") return { pred: 'T', conf: 88, name: "Cầu 1-1" };
         return null;
     },
+    detect_2_2: (history) => {
+        if (history.length >= 4 && history.slice(-4).join('') === "TTXX") return { pred: 'X', conf: 82, name: "Cầu 2-2" };
+        if (history.length >= 4 && history.slice(-4).join('') === "XXTT") return { pred: 'T', conf: 82, name: "Cầu 2-2" };
+        return null;
+    },
+    detect_3_3: (history) => {
+        if (history.length >= 6 && history.slice(-6).join('') === "TTTXXX") return { pred: 'X', conf: 78, name: "Cầu 3-3" };
+        if (history.length >= 6 && history.slice(-6).join('') === "XXXTTT") return { pred: 'T', conf: 78, name: "Cầu 3-3" };
+        return null;
+    },
+    detect_4_4: (history) => {
+        if (history.length >= 8 && history.slice(-8).join('') === "TTTTXXXX") return { pred: 'X', conf: 79, name: "Cầu 4-4" };
+        if (history.length >= 8 && history.slice(-8).join('') === "XXXXTTTT") return { pred: 'T', conf: 79, name: "Cầu 4-4" };
+        return null;
+    },
+    detect_5_5: (history) => {
+        if (history.length >= 10 && history.slice(-10).join('') === "TTTTTXXXXX") return { pred: 'X', conf: 77, name: "Cầu 5-5" };
+        if (history.length >= 10 && history.slice(-10).join('') === "XXXXXTTTTT") return { pred: 'T', conf: 77, name: "Cầu 5-5" };
+        return null;
+    },
+    detect_triangle: (history) => {
+        const last5 = history.slice(-5).join('');
+        if (last5 === "TXTXT") return { pred: 'X', conf: 80, name: "Cầu tam giác" };
+        if (last5 === "XTXTX") return { pred: 'T', conf: 80, name: "Cầu tam giác" };
+        return null;
+    },
+    detect_zigzag: (history) => {
+        if (history.length >= 5 && history.slice(-5).join('') === "TXTXT") return { pred: 'X', conf: 80, name: "Zigzag 5" };
+        if (history.length >= 5 && history.slice(-5).join('') === "XTXTX") return { pred: 'T', conf: 80, name: "Zigzag 5" };
+        return null;
+    },
     detect_dragon: (history) => {
         let tRun = 0;
         for (let i = history.length - 1; i >= 0; i--) { if (history[i] === 'T') tRun++; else break; }
-        if (tRun >= 6) return { pred: 'X', conf: 82, name: `Cầu Rồng ${tRun}` };
-        if (tRun >= 4) return { pred: 'T', conf: 72, name: `Cầu Rồng ${tRun}` };
+        if (tRun >= 6) return { pred: 'X', conf: 82, name: `Rồng ${tRun}` };
+        if (tRun >= 4) return { pred: 'T', conf: 72, name: `Rồng ${tRun}` };
         return null;
     },
     detect_tiger: (history) => {
         let xRun = 0;
         for (let i = history.length - 1; i >= 0; i--) { if (history[i] === 'X') xRun++; else break; }
-        if (xRun >= 6) return { pred: 'T', conf: 82, name: `Cầu Hổ ${xRun}` };
-        if (xRun >= 4) return { pred: 'X', conf: 72, name: `Cầu Hổ ${xRun}` };
+        if (xRun >= 6) return { pred: 'T', conf: 82, name: `Hổ ${xRun}` };
+        if (xRun >= 4) return { pred: 'X', conf: 72, name: `Hổ ${xRun}` };
+        return null;
+    },
+    detect_day_gay: (history) => {
+        let streak = 1;
+        const first = history[history.length - 1];
+        for (let i = history.length - 2; i >= 0; i--) {
+            if (history[i] === first) streak++; else break;
+        }
+        if (streak >= 5 && history[history.length - streak] && history[history.length - streak] !== first) {
+            return { pred: history[history.length - streak], conf: 70 + streak, name: `Dây gãy ${streak}` };
+        }
+        return null;
+    },
+    detect_121: (history) => {
+        if (history.length >= 4 && history[history.length-4] !== history[history.length-3] && history[history.length-3] === history[history.length-2] && history[history.length-2] !== history[history.length-1] && history[history.length-4] === history[history.length-1]) {
+            return { pred: history[history.length-1] === 'T' ? 'X' : 'T', conf: 68, name: "Cầu 1-2-1" };
+        }
+        return null;
+    },
+    detect_123: (history) => {
+        if (history.length >= 6) {
+            const [a,b,c,d,e,f] = history.slice(-6);
+            if (b === c && c !== d && d !== e && e === f) return { pred: a, conf: 70, name: "Cầu 1-2-3" };
+        }
+        return null;
+    },
+    detect_321: (history) => {
+        if (history.length >= 6) {
+            const [a,b,c,d,e,f] = history.slice(-6);
+            if (a === b && b === c && d === e && e === f && a !== d) return { pred: d, conf: 72, name: "Cầu 3-2-1" };
+        }
+        return null;
+    },
+    detect_212: (history) => {
+        if (history.length >= 6) {
+            const [a,b,c,d,e,f] = history.slice(-6);
+            if (a === b && b !== c && c !== d && d === e && e === f && a !== d) return { pred: d, conf: 66, name: "Cầu 2-1-2" };
+        }
         return null;
     }
 };
 
-// ==================== 2. LỚP DỰ ĐOÁN CHÍNH (ĐÃ TỐI ƯU) ====================
+// ==================== 2. LỚP DỰ ĐOÁN CHÍNH (TỐI ƯU) ====================
 class AnhlakhoiGodAI {
     constructor() {
         this.history = [];
@@ -189,7 +259,7 @@ class AnhlakhoiGodAI {
         if (streak >= 2) {
             if (streak <= 3) add(R[0], 60, 'bet_short', `Bệt ${streak} → Tiếp`);
             else if (streak <= 5) {
-                const shouldBreak = streak >= 5; // bẻ khi bệt dài
+                const shouldBreak = streak >= 5;
                 add(shouldBreak ? (R[0] === 'T' ? 'X' : 'T') : R[0], shouldBreak ? 68 : 64, 'bet_mid', `Bệt ${streak} → ${shouldBreak ? 'Gãy' : 'Tiếp'}`);
             } else {
                 add(R[0] === 'T' ? 'X' : 'T', 75 + streak, 'bet_long', `Bệt ${streak} → Gãy`);
@@ -202,12 +272,21 @@ class AnhlakhoiGodAI {
         if (alt >= 4 && alt <= 6) add(R[0] === 'T' ? 'X' : 'T', 62 + alt, 'c11', `Cầu 1-1 (${alt})`);
         else if (alt >= 7) add(R[0] === 'T' ? 'X' : 'T', 70 + alt, 'c11_long', `Cầu 1-1 DÀI (${alt})`);
 
-        // Rồng, Hổ
+        // Rồng, Hổ, Dây gãy
         if (streak >= 6) add(R[0] === 'T' ? 'X' : 'T', 75 + streak, 'rong', `Rồng ${streak} → GÃY`);
         if (streak >= 5 && R[streak] && R[streak] !== R[0]) add(R[streak], 70 + streak, 'daygay', `Dây gãy ${streak} → Theo mới`);
 
+        // Các pattern detector mở rộng
+        for (const [name, detector] of Object.entries(PatternDetectors)) {
+            const res = detector(R);
+            if (res) {
+                const id = 'pattern_' + name;
+                add(res.pred, res.conf, id, res.name);
+            }
+        }
+
         // Các thuật toán bổ sung
-        const histObj = data.map(d => ({ result: d.Ket_qua || d.result, total: d.total || d.Tong, dice: d.dice || [d.Xuc_xac_1, d.Xuc_xac_2, d.Xuc_xac_3] }));
+        const histObj = data.map(d => ({ result: d.result, total: d.total, dice: d.dice }));
         const seq = R.join('');
 
         const markovRes = predictMarkov(seq);
@@ -227,11 +306,6 @@ class AnhlakhoiGodAI {
 
         const dtRes = decisionTree(R);
         if (dtRes) add(dtRes, 60, 'decision_tree', 'Decision Tree');
-
-        for (const [name, detector] of Object.entries(PatternDetectors)) {
-            const res = detector(R);
-            if (res) add(res.pred, res.conf, name, res.name);
-        }
 
         if (S.length === 0) add(R[0] === 'T' ? 'X' : 'T', 52, 'cau_tu_nhien', 'Cầu tự nhiên');
         return S;
