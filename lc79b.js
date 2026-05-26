@@ -23,9 +23,11 @@ const FETCH_PER_REQUEST  = 100;
 const FETCH_INTERVAL     = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 const MAX_STORED_SESSIONS = 10000;
-const RECENT_WINDOW = 50;   // cửa sổ đánh giá hiệu suất gần đây
-const MIN_PATTERN_CONFIDENCE = 55; // ngưỡng tối thiểu để chấp nhận tín hiệu
-const SAFE_MODE_THRESHOLD = 3;   // số lần thua liên tiếp để vào safe mode
+
+const RECENT_WINDOW       = 30;   // Số phiên gần nhất để đánh giá pattern
+const STRONG_TREND        = 5;    // Ngưỡng bệt mạnh
+const SAFE_MODE_LOSSES    = 3;    // Số lần thua liên tiếp để vào chế độ an toàn
+const MIN_ACCURACY        = 0.45; // Tỉ lệ thắng tối thiểu gần đây
 
 // ==================== 1. CÁC HÀM PHÂN TÍCH CƠ BẢN ====================
 function predictMarkov(seq) {
@@ -151,26 +153,25 @@ const PatternDetectors = {
     }
 };
 
-// ==================== 2. LỚP DỰ ĐOÁN CHÍNH ====================
-class AnhlakhoiGodAI {
+// ==================== 2. LỚP DỰ ĐOÁN CHÍNH (MASTER PREDICTOR) ====================
+class MasterPredictor {
     constructor() {
-        this.history = [];
-        this.globalPerf = {};      // { patternId: { correct, total } }
-        this.recentPerf = {};      // cửa sổ RECENT_WINDOW phiên
-        this.recentResults = [];   // lưu kết quả đúng/sai gần đây
+        this.history = [];               // { result, total, dice }
+        this.patterns = {};              // id -> { recent: { correct, total }, global: { correct, total } }
+        this.recentResults = [];         // kết quả đúng/sai 30 phiên gần nhất
         this.consecutiveLosses = 0;
         this.safeMode = false;
-        this.threshold = MIN_PATTERN_CONFIDENCE;
+        this.threshold = 55;             // ngưỡng confidence tối thiểu
         this.lastPred = null;
         this.lastPatterns = [];
     }
 
-    addSession(s) {
-        const result = s.ket_qua === 'Tài' ? 'T' : 'X';
+    addSession(session) {
+        const result = session.ket_qua === 'Tài' ? 'T' : 'X';
         this.history.push({
             result,
-            total: s.tong,
-            dice: [s.xuc_xac_1, s.xuc_xac_2, s.xuc_xac_3]
+            total: session.tong,
+            dice: [session.xuc_xac_1, session.xuc_xac_2, session.xuc_xac_3]
         });
         if (this.history.length > MAX_STORED_SESSIONS) this.history.shift();
     }
@@ -179,22 +180,20 @@ class AnhlakhoiGodAI {
         return this.history.map(h => h.result).reverse();
     }
 
-    _getPatternWeight(id) {
-        const recent = this.recentPerf[id];
-        if (!recent || recent.total < 5) {
-            // nếu chưa có recent, dùng global hoặc mặc định 1.0
-            const global = this.globalPerf[id];
-            if (global && global.total >= 10) {
-                return Math.max(0.1, global.correct / global.total);
+    _getPatternScore(id) {
+        const perf = this.patterns[id];
+        if (!perf || !perf.recent || perf.recent.total < 5) {
+            // Nếu chưa có recent, dùng global hoặc trả về điểm mặc định
+            if (perf && perf.global && perf.global.total >= 10) {
+                return perf.global.correct / perf.global.total;
             }
-            return 1.0;
+            return 1.0; // mặc định
         }
-        const recentAcc = recent.correct / recent.total;
-        if (recentAcc < 0.4) return 0; // loại bỏ pattern yếu gần đây
-        // Kết hợp global nếu có
-        const global = this.globalPerf[id];
-        if (global && global.total >= 10) {
-            const globalAcc = global.correct / global.total;
+        const recentAcc = perf.recent.correct / perf.recent.total;
+        if (recentAcc < 0.4) return 0; // loại bỏ nếu gần đây quá kém
+        // Kết hợp global (nếu có) với tỉ lệ 70% recent, 30% global
+        if (perf.global && perf.global.total >= 10) {
+            const globalAcc = perf.global.correct / perf.global.total;
             return recentAcc * 0.7 + globalAcc * 0.3;
         }
         return recentAcc;
@@ -205,19 +204,18 @@ class AnhlakhoiGodAI {
         const data = this.history.slice().reverse();
         const lastDice = this.history.length > 0 ? this.history[this.history.length - 1].dice : [0,0,0];
         const lastTotal = data[0]?.total || 0;
-        const S = [];
+        const signals = [];
 
         const add = (pred, conf, id, name) => {
-            // safe mode: chỉ chấp nhận tín hiệu rất mạnh
             const effectiveThreshold = this.safeMode ? 70 : this.threshold;
             if (conf >= effectiveThreshold) {
-                const weight = this._getPatternWeight(id);
-                if (weight === 0) return;
-                S.push({ pred, conf, weight, id, name });
+                const score = this._getPatternScore(id);
+                if (score === 0) return;
+                signals.push({ pred, conf, weight: score, id, name });
             }
         };
 
-        // 1. Tín hiệu mạnh từ điểm
+        // 1. Tín hiệu mạnh từ tổng điểm
         if (lastTotal <= 4) add('T', 82, 'score_low', `Tổng ${lastTotal} → Tài`);
         if (lastTotal >= 17) add('X', 80, 'score_high', `Tổng ${lastTotal} → Xỉu`);
 
@@ -233,7 +231,12 @@ class AnhlakhoiGodAI {
         // 3. Bệt
         let streak = 1;
         for (let i = 1; i < R.length; i++) { if (R[i] === R[0]) streak++; else break; }
-        if (streak >= 2) {
+        if (streak >= STRONG_TREND) {
+            // Xu hướng mạnh: theo bệt
+            add(R[0], 78, 'strong_trend', `Bệt ${streak} → Tiếp`);
+            // Cũng thêm tín hiệu gãy nhưng trọng số thấp hơn
+            add(R[0] === 'T' ? 'X' : 'T', 65, 'trend_reversal', `Bệt ${streak} → Gãy?`);
+        } else if (streak >= 2) {
             if (streak <= 3) add(R[0], 60, 'bet_short', `Bệt ${streak} → Tiếp`);
             else if (streak <= 5) {
                 const shouldBreak = streak >= 5;
@@ -282,12 +285,14 @@ class AnhlakhoiGodAI {
         if (dtRes) add(dtRes, 60, 'decision_tree', 'Decision Tree');
 
         // Nếu không có tín hiệu, dùng cầu tự nhiên an toàn
-        if (S.length === 0) {
+        if (signals.length === 0) {
             const naturalPred = R[0] === 'T' ? 'X' : 'T';
             add(naturalPred, 51, 'cau_tu_nhien', 'Cầu tự nhiên');
         }
 
-        return S;
+        // Sắp xếp tín hiệu theo điểm (weight * confidence) giảm dần, lấy top 7
+        signals.sort((a, b) => (b.conf * b.weight) - (a.conf * a.weight));
+        return signals.slice(0, 7);
     }
 
     predict() {
@@ -297,8 +302,8 @@ class AnhlakhoiGodAI {
             return { action: 'CÂN NHẮC', prediction: pred, confidence: 51 };
         }
 
-        // Nếu thua liên tiếp >= SAFE_MODE_THRESHOLD, bật safe mode
-        this.safeMode = this.consecutiveLosses >= SAFE_MODE_THRESHOLD;
+        // Kiểm tra safe mode
+        this.safeMode = this.consecutiveLosses >= SAFE_MODE_LOSSES;
 
         const signals = this._collectSignals();
         if (signals.length === 0) {
@@ -316,7 +321,6 @@ class AnhlakhoiGodAI {
         if (sT === sX && sT === 0) {
             sT = 0.001; sX = 0;
         } else if (sT === sX) {
-            // Sử dụng phân phối dài hạn để phá vỡ
             const totalT = this.history.filter(h => h.result === 'T').length;
             const totalX = this.history.length - totalT;
             if (totalT > totalX) sT += 0.001; else sX += 0.001;
@@ -342,38 +346,40 @@ class AnhlakhoiGodAI {
         const actualTai = actual === 'Tài';
         const correct = predictedTai === actualTai;
 
-        // Cập nhật recentResults và streak
+        // Cập nhật recent results
         this.recentResults.push(correct);
         if (this.recentResults.length > RECENT_WINDOW) this.recentResults.shift();
 
+        // Cập nhật streak
         if (correct) {
             this.consecutiveLosses = 0;
-            this.safeMode = false; // thoát safe mode ngay khi thắng
+            this.safeMode = false;
         } else {
             this.consecutiveLosses++;
         }
 
         // Cập nhật hiệu suất pattern
         this.lastPatterns.forEach(id => {
-            // Global
-            if (!this.globalPerf[id]) this.globalPerf[id] = { correct: 0, total: 0 };
-            this.globalPerf[id].total++;
-            if (correct) this.globalPerf[id].correct++;
-
-            // Recent (chỉ lưu tối đa RECENT_WINDOW mẫu)
-            if (!this.recentPerf[id]) this.recentPerf[id] = { correct: 0, total: 0 };
-            // Giới hạn recentPerf: nếu tổng vượt quá RECENT_WINDOW, ta reset luôn để chỉ lưu dữ liệu gần nhất
-            if (this.recentPerf[id].total >= RECENT_WINDOW) {
-                this.recentPerf[id] = { correct: 0, total: 0 };
+            if (!this.patterns[id]) {
+                this.patterns[id] = { recent: { correct: 0, total: 0 }, global: { correct: 0, total: 0 } };
             }
-            this.recentPerf[id].total++;
-            if (correct) this.recentPerf[id].correct++;
+            const p = this.patterns[id];
+            // Global
+            p.global.total++;
+            if (correct) p.global.correct++;
+            // Recent (giới hạn cửa sổ)
+            if (p.recent.total >= RECENT_WINDOW) {
+                // Reset recent để chỉ giữ dữ liệu mới
+                p.recent = { correct: 0, total: 0 };
+            }
+            p.recent.total++;
+            if (correct) p.recent.correct++;
         });
 
         // Điều chỉnh threshold động
         if (this.recentResults.length >= 10) {
             const recentAcc = this.recentResults.filter(r => r).length / this.recentResults.length;
-            this.threshold = recentAcc > 0.6 ? 52 : recentAcc < 0.45 ? 58 : 55;
+            this.threshold = recentAcc > 0.6 ? 52 : recentAcc < 0.45 ? 60 : 55;
         }
     }
 
@@ -383,7 +389,7 @@ class AnhlakhoiGodAI {
             : '0%';
         return {
             totalHistory: this.history.length,
-            activePatterns: Object.keys(this.globalPerf).length,
+            activePatterns: Object.keys(this.patterns).length,
             recentAccuracy: recentAcc,
             consecutiveLosses: this.consecutiveLosses,
             safeMode: this.safeMode,
@@ -393,10 +399,10 @@ class AnhlakhoiGodAI {
 }
 
 // ==================== 3. SERVER ====================
-const predictorHU  = new AnhlakhoiGodAI();
-const predictorMD5 = new AnhlakhoiGodAI();
+const predictorHU = new MasterPredictor();
+const predictorMD5 = new MasterPredictor();
 let predictionHistory = { hu: [], md5: [] };
-let pendingPrediction  = { hu: null, md5: null };
+let pendingPrediction = { hu: null, md5: null };
 
 function loadJSON(filename, defaultValue) {
     try { if (fs.existsSync(filename)) return JSON.parse(fs.readFileSync(filename, 'utf8')); }
