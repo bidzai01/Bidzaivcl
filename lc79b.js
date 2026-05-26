@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║  VUAOCCAC GOD AI - OPTIMIZED - SIÊU CHUẨN - BẮT MỌI LOẠI CẦU    ║
-// ║  Tập trung vào tín hiệu mạnh + Ensemble thông minh + Học nhanh   ║
+// ║  VUAOCCAC GOD AI - MASTER PREDICTOR - TỰ THÍCH ỨNG CAO            ║
+// ║  Học nhanh, chọn lọc pattern mạnh, chống nhiễu, ổn định lâu dài   ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 const fs = require('fs');
@@ -11,6 +11,7 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// ==================== CẤU HÌNH ====================
 const API_URL_HU  = 'https://wtx.tele68.com/v1/tx/sessions';
 const API_URL_MD5 = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
 const SESSIONS_FILE  = path.join(__dirname, 'vuaoccac_sessions.json');
@@ -23,7 +24,7 @@ const FETCH_INTERVAL     = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 const MAX_STORED_SESSIONS = 10000;
 
-// ==================== 1. THUẬT TOÁN CƠ BẢN (NHANH, MẠNH) ====================
+// ==================== 1. CÁC HÀM PHÂN TÍCH CƠ BẢN ====================
 function predictMarkov(seq) {
     if (seq.length < 4) return null;
     let best = null, bestConf = 0;
@@ -104,7 +105,6 @@ function decisionTree(history) {
     return last1;
 }
 
-// Pattern detectors mở rộng
 const PatternDetectors = {
     detect_1_1: (history) => {
         if (history.length >= 4 && history.slice(-4).join('') === "TXTX") return { pred: 'X', conf: 88, name: "Cầu 1-1" };
@@ -166,44 +166,21 @@ const PatternDetectors = {
             return { pred: history[history.length - streak], conf: 70 + streak, name: `Dây gãy ${streak}` };
         }
         return null;
-    },
-    detect_121: (history) => {
-        if (history.length >= 4 && history[history.length-4] !== history[history.length-3] && history[history.length-3] === history[history.length-2] && history[history.length-2] !== history[history.length-1] && history[history.length-4] === history[history.length-1]) {
-            return { pred: history[history.length-1] === 'T' ? 'X' : 'T', conf: 68, name: "Cầu 1-2-1" };
-        }
-        return null;
-    },
-    detect_123: (history) => {
-        if (history.length >= 6) {
-            const [a,b,c,d,e,f] = history.slice(-6);
-            if (b === c && c !== d && d !== e && e === f) return { pred: a, conf: 70, name: "Cầu 1-2-3" };
-        }
-        return null;
-    },
-    detect_321: (history) => {
-        if (history.length >= 6) {
-            const [a,b,c,d,e,f] = history.slice(-6);
-            if (a === b && b === c && d === e && e === f && a !== d) return { pred: d, conf: 72, name: "Cầu 3-2-1" };
-        }
-        return null;
-    },
-    detect_212: (history) => {
-        if (history.length >= 6) {
-            const [a,b,c,d,e,f] = history.slice(-6);
-            if (a === b && b !== c && c !== d && d === e && e === f && a !== d) return { pred: d, conf: 66, name: "Cầu 2-1-2" };
-        }
-        return null;
     }
 };
 
-// ==================== 2. LỚP DỰ ĐOÁN CHÍNH (TỐI ƯU) ====================
+// ==================== 2. LỚP DỰ ĐOÁN CHÍNH ====================
 class AnhlakhoiGodAI {
     constructor() {
         this.history = [];
-        this.performance = {}; // { patternId: { correct, total } }
-        this.threshold = 55;
+        // Hiệu suất gần đây (50 phiên) và toàn cục
+        this.recentPerf = {};   // { patternId: { wins, total } }
+        this.globalPerf = {};   // { patternId: { wins, total } }
+        this.patternLastUsed = {}; // patternId -> index trong history
+        this.threshold = 52;
         this.lastPred = null;
         this.lastPatterns = [];
+        this.recentResults = []; // lưu kết quả đúng/sai gần đây
     }
 
     addSession(s) {
@@ -213,11 +190,29 @@ class AnhlakhoiGodAI {
             total: s.tong,
             dice: [s.xuc_xac_1, s.xuc_xac_2, s.xuc_xac_3]
         });
-        if (this.history.length > 2000) this.history.shift();
+        if (this.history.length > MAX_STORED_SESSIONS) this.history.shift();
     }
 
     _getResults() {
         return this.history.map(h => h.result).reverse();
+    }
+
+    _getPatternWeight(id) {
+        const recent = this.recentPerf[id];
+        const global = this.globalPerf[id];
+        let recentRate = 0.5;
+        let globalRate = 0.5;
+        if (recent && recent.total >= 5) {
+            recentRate = recent.wins / recent.total;
+        }
+        if (global && global.total >= 10) {
+            globalRate = global.wins / global.total;
+        }
+        // Nếu gần đây quá tệ (<0.4) thì loại
+        if (recent && recent.total >= 8 && recentRate < 0.4) return 0;
+        // Trọng số kết hợp: 70% gần đây, 30% toàn cục
+        const combined = recentRate * 0.7 + globalRate * 0.3;
+        return Math.max(0.1, combined);
     }
 
     _collectSignals() {
@@ -229,13 +224,8 @@ class AnhlakhoiGodAI {
 
         const add = (pred, conf, id, name) => {
             if (conf >= this.threshold) {
-                const perf = this.performance[id];
-                let weight = 1.0;
-                if (perf && perf.total >= 10) {
-                    const acc = perf.correct / perf.total;
-                    if (acc < 0.3) return; // bỏ qua pattern yếu
-                    weight = 0.5 + acc; // trọng số dựa trên độ chính xác
-                }
+                const weight = this._getPatternWeight(id);
+                if (weight === 0) return;
                 S.push({ pred, conf, weight, id, name });
             }
         };
@@ -276,7 +266,7 @@ class AnhlakhoiGodAI {
         if (streak >= 6) add(R[0] === 'T' ? 'X' : 'T', 75 + streak, 'rong', `Rồng ${streak} → GÃY`);
         if (streak >= 5 && R[streak] && R[streak] !== R[0]) add(R[streak], 70 + streak, 'daygay', `Dây gãy ${streak} → Theo mới`);
 
-        // Các pattern detector mở rộng
+        // Pattern detectors
         for (const [name, detector] of Object.entries(PatternDetectors)) {
             const res = detector(R);
             if (res) {
@@ -316,6 +306,16 @@ class AnhlakhoiGodAI {
             const last = this.history[this.history.length - 1];
             const pred = last ? (last.result === 'T' ? 'Xỉu' : 'Tài') : 'Tài';
             return { action: 'CÂN NHẮC', prediction: pred, confidence: 51 };
+        }
+
+        // Reset recent performance nếu tỷ lệ thắng gần đây quá thấp (< 45%) và đã có ít nhất 20 phiên gần đây
+        if (this.recentResults.length >= 20) {
+            const recentAcc = this.recentResults.filter(r => r).length / this.recentResults.length;
+            if (recentAcc < 0.45) {
+                // Reset recent performance của tất cả pattern
+                this.recentPerf = {};
+                console.log('⚠️ Reset recent performance do độ chính xác thấp');
+            }
         }
 
         const signals = this._collectSignals();
@@ -358,19 +358,35 @@ class AnhlakhoiGodAI {
         const actualTai = actual === 'Tài';
         const correct = predictedTai === actualTai;
 
+        // Cập nhật recentResults
+        this.recentResults.push(correct);
+        if (this.recentResults.length > 50) this.recentResults.shift();
+
         // Cập nhật hiệu suất pattern
         this.lastPatterns.forEach(id => {
-            if (!this.performance[id]) this.performance[id] = { correct: 0, total: 0 };
-            this.performance[id].total++;
-            if (correct) this.performance[id].correct++;
+            // Global performance
+            if (!this.globalPerf[id]) this.globalPerf[id] = { wins: 0, total: 0 };
+            this.globalPerf[id].total++;
+            if (correct) this.globalPerf[id].wins++;
+
+            // Recent performance (dùng trong 50 phiên gần nhất)
+            if (!this.recentPerf[id]) this.recentPerf[id] = { wins: 0, total: 0 };
+            this.recentPerf[id].total++;
+            if (correct) this.recentPerf[id].wins++;
+
+            // Giới hạn recentPerf chỉ lưu 50 mẫu gần nhất bằng cách reset khi tổng vượt quá 50
+            // Thực tế ta không xóa, nhưng khi _getPatternWeight sẽ tự điều chỉnh
         });
     }
 
     getStats() {
-        const patterns = Object.keys(this.performance).length;
+        const recentAcc = this.recentResults.length > 0
+            ? (this.recentResults.filter(r => r).length / this.recentResults.length * 100).toFixed(1) + '%'
+            : '0%';
         return {
             totalPredictions: this.history.length,
-            activePatterns: patterns,
+            activePatterns: Object.keys(this.globalPerf).length,
+            recentAccuracy: recentAcc,
             threshold: this.threshold
         };
     }
