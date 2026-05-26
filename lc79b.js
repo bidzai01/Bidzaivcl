@@ -3,7 +3,7 @@
 // ║  Meta-Learner + HMM + 200+ Patterns + Deep Learning Core          ║
 // ║  FIXED: WIN/LOSS TRACKING - SMART BRIDGE ANALYSIS - AI CORE       ║
 // ║  NÂNG CẤP: HỌC NHANH 10X - BỘ NHỚ RIÊNG - BẮT XÚC XẮC LẶP       ║
-// ║  PHIÊN BẢN ĐẦY ĐỦ - KHÔNG THIẾU DÒNG NÀO - BY ANHLAKHOI DZAI    ║
+// ║  PHIÊN BẢN ĐẦY ĐỦ - KHÔNG THIẾU DÒNG NÀO - BY ANHKHOI DZAI      ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 const fs = require('fs');
@@ -1103,4 +1103,4 @@ async function main() {
     }, AUTO_SAVE_INTERVAL);
 }
 
-app.listen(PORT, '0.0.0.0', () => { console.log(`🚀 VuaOcCac AI chạy tại cổng ${PORT}`); main(); });
+app.listen(PORT, '0.0.0.0', () => { console.log(`🚀 VuaOcCac AI chạy tại cổng ${PORT}`); main(); })
