@@ -1,8 +1,3 @@
-// ╔══════════════════════════════════════════════════════════════════════╗
-// ║  VUAOCCAC PRO AI - FRESH 10 SCAN - SIÊU CHUẨN XÁC                ║
-// ║  Luôn lấy 10 phiên mới nhất từ API - Quét 40+ thuật toán         ║
-// ╚══════════════════════════════════════════════════════════════════════╝
-
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
