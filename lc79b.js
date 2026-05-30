@@ -1,690 +1,1169 @@
-// ╔══════════════════════════════════════════════════════════════════════╗
-// ║  VUAOCCAC ELITE AI - 200 HISTORY - SIÊU CHUẨN XÁC                ║
-// ║  Fresh Scan 20 + Smart Voting + Deep Pattern Learning            ║
-// ╚══════════════════════════════════════════════════════════════════════╝
-
+// server.js
+const express = require('express');
+const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
-const express = require('express');
+
+// --- CẤU HÌNH ---
+const PORT = 3000;
+const API_URL = "https://wtxmd52.tele68.com/v1/txmd5/sessions";
+
+// --- GLOBAL STATE ---
+let txHistory = []; 
+let currentSessionId = null; 
+let fetchInterval = null; 
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// ==================== CẤU HÌNH ====================
-const API_URL_HU  = 'https://wtx.tele68.com/v1/tx/sessions';
-const API_URL_MD5 = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
-const HISTORY_FILE = path.join(__dirname, 'vuaoccac_history.json');
-
-const FRESH_SCAN_COUNT = 20;
-const MAX_HISTORY = 200; // Tăng lên 200
-
-// ==================== 1. 40+ THUẬT TOÁN PHÂN TÍCH ====================
-
-function algo_bet(results) {
-    let s = 1;
-    for (let i = 1; i < results.length; i++) {
-        if (results[i] === results[0]) s++; else break;
+// CORS
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
     }
-    if (s >= 7) return results[0] === 'T' ? 'X' : 'T';
-    if (s >= 5) return results[0] === 'T' ? 'X' : 'T';
-    if (s >= 3) return results[0];
-    return null;
+    next();
+});
+
+// --- UTILITIES TỐI ƯU ---
+function parseLines(data) {
+    if (!data || !Array.isArray(data.list)) return [];
+    
+    const sortedList = data.list.sort((a, b) => b.id - a.id);
+    const arr = sortedList.map(item => ({
+        session: item.id,
+        dice: item.dices,
+        total: item.point,
+        result: item.resultTruyenThong,
+        tx: item.point >= 11 ? 'T' : 'X'
+    }));
+
+    return arr.sort((a, b) => a.session - b.session);
 }
 
-function algo_11(results) {
-    let alt = 1;
-    for (let i = 1; i < results.length; i++) {
-        if (results[i] !== results[i-1]) alt++; else break;
-    }
-    if (alt >= 5) return results[0] === 'T' ? 'X' : 'T';
-    if (alt >= 3) return results[0] === 'T' ? 'X' : 'T';
-    return null;
+function lastN(arr, n) {
+    const start = Math.max(0, arr.length - n);
+    return arr.slice(start);
 }
 
-function algo_22(results) {
-    let pairs = 0;
-    for (let i = 0; i < results.length - 1; i += 2) {
-        if (results[i] === results[i+1]) pairs++; else break;
+function majority(obj) {
+    let maxK = null, maxV = -Infinity;
+    for (const k in obj) {
+        if (obj[k] > maxV) {
+            maxV = obj[k];
+            maxK = k;
+        }
     }
-    if (pairs >= 3) return results[(pairs-1)*2] === 'T' ? 'X' : 'T';
-    if (pairs >= 2) return results[(pairs-1)*2];
-    return null;
+    return { key: maxK, val: maxV };
 }
 
-function algo_33(results) {
-    let triples = 0;
-    for (let i = 0; i < results.length - 2; i += 3) {
-        if (results[i] === results[i+1] && results[i+1] === results[i+2]) triples++; else break;
-    }
-    if (triples >= 2) return results[(triples-1)*3] === 'T' ? 'X' : 'T';
-    if (triples >= 1) return results[(triples-1)*3];
-    return null;
+function sum(nums) {
+    return nums.reduce((a, b) => a + b, 0);
 }
 
-function algo_triangle(results) {
-    if (results.length >= 5) {
-        const l5 = results.slice(0, 5);
-        if (l5[0] !== l5[1] && l5[1] !== l5[2] && l5[2] !== l5[3] && l5[3] !== l5[4] && l5[0] === l5[4]) {
-            return l5[0] === 'T' ? 'X' : 'T';
+function avg(nums) {
+    return nums.length ? sum(nums) / nums.length : 0;
+}
+
+function entropy(arr) {
+    if (!arr.length) return 0;
+    const freq = {};
+    for (const v of arr) freq[v] = (freq[v] || 0) + 1;
+    
+    let e = 0, n = arr.length;
+    for (const k in freq) {
+        const p = freq[k] / n;
+        e -= p * Math.log2(p);
+    }
+    return e;
+}
+
+function similarity(a, b) {
+    if (a.length !== b.length) return 0;
+    let m = 0;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] === b[i]) m++;
+    }
+    return m / a.length;
+}
+
+function extractFeatures(history) {
+    const tx = history.map(h => h.tx);
+    const totals = history.map(h => h.total);
+    
+    const freq = {};
+    for (const v of tx) freq[v] = (freq[v] || 0) + 1;
+    
+    let runs = [], cur = tx[0], len = 1;
+    for (let i = 1; i < tx.length; i++) {
+        if (tx[i] === cur) len++;
+        else {
+            runs.push({ val: cur, len });
+            cur = tx[i];
+            len = 1;
+        }
+    }
+    if (tx.length) runs.push({ val: cur, len });
+    
+    const meanTotal = avg(totals);
+    const variance = avg(totals.map(t => Math.pow(t - meanTotal, 2)));
+    
+    const last10 = tx.slice(-10);
+    const last10Totals = totals.slice(-10);
+    const upward = last10Totals.filter((t, i) => i > 0 && t > last10Totals[i-1]).length;
+    const downward = last10Totals.filter((t, i) => i > 0 && t < last10Totals[i-1]).length;
+    
+    return {
+        tx,
+        totals,
+        freq,
+        runs,
+        maxRun: runs.reduce((m, r) => Math.max(m, r.len), 0),
+        meanTotal,
+        stdTotal: Math.sqrt(variance),
+        entropy: entropy(tx),
+        last3Pattern: tx.slice(-3).join(''),
+        last5Pattern: tx.slice(-5).join(''),
+        last8Pattern: tx.slice(-8).join(''),
+        trends: { upward, downward }
+    };
+}
+
+// --- ADVANCED PATTERN DETECTION ---
+function detectPatternType(runs) {
+    if (runs.length < 3) return null;
+    
+    const lastRuns = runs.slice(-6);
+    const lengths = lastRuns.map(r => r.len);
+    const values = lastRuns.map(r => r.val);
+    
+    if (lastRuns.length >= 3) {
+        if (lengths.every(l => l === 1)) {
+            const isAlternating = values.every((v, i) => i === 0 || v !== values[i-1]);
+            if (isAlternating) return '1_1_pattern';
+        }
+        
+        if (lengths.every(l => l === 2)) {
+            const isAlternating = values.every((v, i) => i === 0 || v !== values[i-1]);
+            if (isAlternating) return '2_2_pattern';
+        }
+        
+        if (lengths.every(l => l === 3)) {
+            const isAlternating = values.every((v, i) => i === 0 || v !== values[i-1]);
+            if (isAlternating) return '3_3_pattern';
+        }
+        
+        if (lengths.length >= 5 && 
+            lengths[0] === 2 && lengths[1] === 1 && lengths[2] === 2 && lengths[3] === 1 && lengths[4] === 2) {
+            return '2_1_2_pattern';
+        }
+        
+        if (lengths.length >= 5 &&
+            lengths[0] === 1 && lengths[1] === 2 && lengths[2] === 1 && lengths[3] === 2 && lengths[4] === 1) {
+            return '1_2_1_pattern';
+        }
+        
+        if (lengths.length >= 5 &&
+            lengths[0] === 3 && lengths[1] === 2 && lengths[2] === 3 && lengths[3] === 2 && lengths[4] === 3) {
+            return '3_2_3_pattern';
+        }
+        
+        if (lengths.length >= 5 &&
+            lengths[0] === 4 && lengths[1] === 2 && lengths[2] === 4 && lengths[3] === 2 && lengths[4] === 4) {
+            return '4_2_4_pattern';
+        }
+        
+        if (lengths.length >= 5 &&
+            lengths[0] === 2 && lengths[1] === 2 && lengths[2] === 1 && lengths[3] === 2 && lengths[4] === 2) {
+            return '2_2_1_pattern';
+        }
+        
+        if (lengths.length >= 5 &&
+            lengths[0] === 1 && lengths[1] === 3 && lengths[2] === 1 && lengths[3] === 3 && lengths[4] === 1) {
+            return '1_3_1_pattern';
+        }
+        
+        if (lengths.length >= 5 &&
+            lengths[0] === 3 && lengths[1] === 1 && lengths[2] === 3 && lengths[3] === 1 && lengths[4] === 3) {
+            return '3_1_3_pattern';
+        }
+    }
+    
+    const lastRun = lastRuns[lastRuns.length - 1];
+    if (lastRun && lastRun.len >= 5) return 'long_run_pattern';
+    
+    return 'random_pattern';
+}
+
+function predictNextFromPattern(patternType, runs, lastTx) {
+    if (!patternType) return null;
+    
+    const lastRun = runs[runs.length - 1];
+    
+    switch (patternType) {
+        case '1_1_pattern':
+            return lastTx === 'T' ? 'X' : 'T';
+        case '2_2_pattern':
+            if (lastRun.len === 2) return lastRun.val === 'T' ? 'X' : 'T';
+            return lastRun.val;
+        case '3_3_pattern':
+            if (lastRun.len === 3) return lastRun.val === 'T' ? 'X' : 'T';
+            return lastRun.val;
+        case '2_1_2_pattern':
+            if (lastRun.val === 'T' && lastRun.len === 2) return 'X';
+            if (lastRun.val === 'X' && lastRun.len === 2) return 'T';
+            if (lastRun.len === 1) return lastRun.val === 'T' ? 'T' : 'X';
+            return null;
+        case '1_2_1_pattern':
+            if (lastRun.val === 'T' && lastRun.len === 1) return 'X';
+            if (lastRun.val === 'X' && lastRun.len === 1) return 'T';
+            if (lastRun.len === 2) return lastRun.val;
+            return null;
+        case '3_2_3_pattern':
+            if (lastRun.len === 3) return lastRun.val === 'T' ? 'X' : 'T';
+            if (lastRun.len === 2) return lastRun.val === 'T' ? 'T' : 'X';
+            return null;
+        case '4_2_4_pattern':
+            if (lastRun.len === 4) return lastRun.val === 'T' ? 'X' : 'T';
+            if (lastRun.len === 2) return lastRun.val === 'T' ? 'T' : 'X';
+            return null;
+        case 'long_run_pattern':
+            if (lastRun.len > 7) return lastRun.val === 'T' ? 'X' : 'T';
+            if (lastRun.len >= 4 && lastRun.len <= 7) return lastRun.val;
+            return null;
+        default:
+            return null;
+    }
+}
+
+// --- CORE ALGORITHMS ---
+
+function algo5_freqRebalance(history) {
+    if (history.length < 20) return null;
+    const features = extractFeatures(history);
+    const { freq, entropy: e } = features;
+    
+    const tCount = freq['T'] || 0;
+    const xCount = freq['X'] || 0;
+    const diff = Math.abs(tCount - xCount);
+    const total = tCount + xCount;
+    
+    let threshold;
+    if (e > 0.9) threshold = 0.45;
+    else if (e < 0.4) threshold = 0.65;
+    else threshold = 0.55;
+    
+    const recent = history.slice(-30);
+    const recentT = recent.filter(h => h.tx === 'T').length;
+    const recentX = recent.filter(h => h.tx === 'X').length;
+    const recentDiff = Math.abs(recentT - recentX);
+    const recentTotal = recentT + recentX;
+    
+    if (total > 0 && recentTotal > 0) {
+        const longTermRatio = diff / total;
+        const shortTermRatio = recentDiff / recentTotal;
+        const combinedRatio = (longTermRatio * 0.4) + (shortTermRatio * 0.6);
+        
+        if (combinedRatio > threshold) {
+            if (recentT > recentX + 2) return 'X';
+            if (recentX > recentT + 2) return 'T';
         }
     }
     return null;
 }
 
-function algo_zigzag(results) {
-    let zig = 0;
-    for (let i = 1; i < results.length; i++) {
-        if (results[i] !== results[i-1]) zig++; else break;
-    }
-    if (zig >= 6) return results[0] === 'T' ? 'X' : 'T';
-    if (zig >= 4) return results[0] === 'T' ? 'X' : 'T';
-    return null;
-}
-
-function algo_symmetry(results) {
-    if (results.length >= 8) {
-        const l = results.slice(0, 4);
-        const r = results.slice(4, 8).reverse();
-        if (l.every((v, i) => v === r[i]) && l[0] !== l[1]) {
-            return l[3] === 'T' ? 'X' : 'T';
+function algoA_markov(history) {
+    if (history.length < 15) return null;
+    const tx = history.map(h => h.tx);
+    
+    let maxOrder = 4;
+    if (history.length < 30) maxOrder = 3;
+    if (history.length < 20) maxOrder = 2;
+    
+    let bestPred = null;
+    let bestScore = -1;
+    
+    for (let order = 2; order <= maxOrder; order++) {
+        if (tx.length < order + 8) continue;
+        
+        const transitions = {};
+        const totalTransitions = tx.length - order;
+        const decayFactor = 0.95;
+        
+        for (let i = 0; i < totalTransitions; i++) {
+            const key = tx.slice(i, i + order).join('');
+            const next = tx[i + order];
+            const weight = Math.pow(decayFactor, totalTransitions - i - 1);
+            
+            if (!transitions[key]) transitions[key] = { T: 0, X: 0 };
+            transitions[key][next] += weight;
         }
-    }
-    return null;
-}
-
-function algo_score_low(data) {
-    const total = data[0]?.Tong || 0;
-    if (total <= 4) return 'T';
-    if (total >= 17) return 'X';
-    return null;
-}
-
-function algo_triple_dice(data) {
-    const d = data[0];
-    if (!d) return null;
-    if (d.Xuc_xac_1 === d.Xuc_xac_2 && d.Xuc_xac_2 === d.Xuc_xac_3) {
-        return d.Xuc_xac_1 >= 4 ? 'X' : 'T';
-    }
-    return null;
-}
-
-function algo_pair1(data) {
-    const d = data[0];
-    if (!d) return null;
-    const arr = [d.Xuc_xac_1, d.Xuc_xac_2, d.Xuc_xac_3];
-    if (arr.filter(x => x === 1).length >= 2) return 'T';
-    return null;
-}
-
-function algo_pair6(data) {
-    const d = data[0];
-    if (!d) return null;
-    const arr = [d.Xuc_xac_1, d.Xuc_xac_2, d.Xuc_xac_3];
-    if (arr.filter(x => x === 6).length >= 2) return 'X';
-    return null;
-}
-
-function algo_sum_trend(data) {
-    if (data.length < 10) return null;
-    const sums = data.slice(0, 10).map(d => d.Tong);
-    const a5 = sums.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
-    const a10 = sums.reduce((a, b) => a + b, 0) / 10;
-    if (a5 > a10 + 2) return 'X';
-    if (a5 < a10 - 2) return 'T';
-    return null;
-}
-
-function algo_markov(results) {
-    if (results.length < 4) return null;
-    const seq = results.join('');
-    let best = null, bestConf = 0;
-    for (let order = 3; order <= Math.min(5, results.length - 1); order++) {
-        const last = seq.slice(-order);
-        const trans = {};
-        for (let i = 0; i <= seq.length - order - 1; i++) {
-            const pat = seq.slice(i, i + order);
-            const next = seq[i + order];
-            if (!trans[pat]) trans[pat] = { T: 0, X: 0 };
-            trans[pat][next]++;
-        }
-        const possible = trans[last];
-        if (!possible) continue;
-        const total = possible.T + possible.X;
-        if (total >= 3) {
-            const conf = Math.abs(possible.T - possible.X) / total;
-            if (conf > bestConf) {
-                bestConf = conf;
-                best = possible.T > possible.X ? 'T' : 'X';
+        
+        const lastKey = tx.slice(-order).join('');
+        const counts = transitions[lastKey];
+        
+        if (counts && (counts.T + counts.X) > 0.5) {
+            const total = counts.T + counts.X;
+            const confidence = Math.abs(counts.T - counts.X) / total;
+            const pred = counts.T > counts.X ? 'T' : 'X';
+            const orderWeight = order / maxOrder;
+            const supportWeight = Math.min(1, (counts.T + counts.X) / 10);
+            const score = confidence * orderWeight * supportWeight;
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestPred = pred;
             }
         }
     }
-    return best;
+    return bestPred;
 }
 
-function algo_distribution(results) {
-    const tC = results.filter(r => r === 'T').length;
-    const imb = Math.abs(tC - (results.length - tC)) / results.length;
-    if (imb > 0.15) return tC < results.length / 2 ? 'T' : 'X';
-    return null;
-}
-
-function algo_streak(results) {
-    let s = 1;
-    for (let i = 1; i < results.length; i++) {
-        if (results[i] === results[0]) s++; else break;
-    }
-    if (s >= 4) return results[0] === 'T' ? 'X' : 'T';
-    if (s >= 2) return results[0];
-    return null;
-}
-
-function algo_freq(results) {
-    const t = results.filter(r => r === 'T').length;
-    if (t > results.length * 0.7) return 'X';
-    if (t < results.length * 0.3) return 'T';
-    return null;
-}
-
-function algo_cycle(results) {
-    for (let c = 2; c <= 6; c++) {
-        if (results.length < c * 3) continue;
-        let same = 0, diff = 0;
-        for (let i = c; i < results.length; i++) {
-            if (results[i] === results[i - c]) same++; else diff++;
+function algoB_ngram(history) {
+    if (history.length < 30) return null;
+    const tx = history.map(h => h.tx);
+    
+    const ngramSizes = [];
+    if (history.length >= 50) ngramSizes.push(5, 6);
+    if (history.length >= 40) ngramSizes.push(4);
+    ngramSizes.push(3, 2);
+    
+    let bestPred = null;
+    let bestConfidence = 0;
+    
+    for (const n of ngramSizes) {
+        if (tx.length < n * 2) continue;
+        
+        const target = tx.slice(-n).join('');
+        const matches = [];
+        
+        for (let i = 0; i <= tx.length - n - 1; i++) {
+            const gram = tx.slice(i, i + n).join('');
+            if (gram === target) {
+                matches.push({
+                    position: i,
+                    next: tx[i + n],
+                    distance: tx.length - i
+                });
+            }
         }
-        const ratio = same / (same + diff);
-        if (ratio > 0.65) {
-            return results[results.length - c];
-        }
-    }
-    return null;
-}
-
-function algo_reverse_last(results) {
-    return results[0] === 'T' ? 'X' : 'T';
-}
-
-function algo_follow_last(results) {
-    return results[0];
-}
-
-function algo_121(results) {
-    if (results.length >= 4) {
-        const [a, b, c, d] = results;
-        if (a !== b && b === c && c !== d && a === d) return a;
-    }
-    return null;
-}
-
-function algo_123(results) {
-    if (results.length >= 6) {
-        const [a, b, c, d, e, f] = results;
-        if (b === c && c !== d && d !== e && e === f) return a;
-    }
-    return null;
-}
-
-function algo_321(results) {
-    if (results.length >= 6) {
-        const [a, b, c, d, e, f] = results;
-        if (a === b && b === c && d === e && e === f && a !== d) return d;
-    }
-    return null;
-}
-
-function algo_212(results) {
-    if (results.length >= 6) {
-        const [a, b, c, d, e, f] = results;
-        if (a === b && b !== c && c !== d && d === e && e === f && a !== d) return d;
-    }
-    return null;
-}
-
-function algo_1221(results) {
-    if (results.length >= 4) {
-        const [a, b, c, d] = results;
-        if (a !== b && b === c && c === d && d !== a) return a;
-    }
-    return null;
-}
-
-function algo_2112(results) {
-    if (results.length >= 4) {
-        const [a, b, c, d] = results;
-        if (a === b && b !== c && c === d && d !== a) return a;
-    }
-    return null;
-}
-
-function algo_dragon(results) {
-    let tRun = 0;
-    for (let i = 0; i < results.length; i++) {
-        if (results[i] === 'T') tRun++; else break;
-    }
-    if (tRun >= 7) return 'X';
-    if (tRun >= 5) return 'X';
-    if (tRun >= 3) return 'T';
-    return null;
-}
-
-function algo_tiger(results) {
-    let xRun = 0;
-    for (let i = 0; i < results.length; i++) {
-        if (results[i] === 'X') xRun++; else break;
-    }
-    if (xRun >= 7) return 'T';
-    if (xRun >= 5) return 'T';
-    if (xRun >= 3) return 'X';
-    return null;
-}
-
-function algo_day_gay(results) {
-    let s = 1;
-    for (let i = 1; i < results.length; i++) {
-        if (results[i] === results[0]) s++; else break;
-    }
-    if (s >= 4 && results[s] && results[s] !== results[0]) return results[s];
-    return null;
-}
-
-function algo_bac_thang(data) {
-    if (data.length >= 4) {
-        const s4 = data.slice(0, 4).map(d => d.Tong);
-        const inc = s4[0] < s4[1] && s4[1] < s4[2] && s4[2] < s4[3];
-        const dec = s4[0] > s4[1] && s4[1] > s4[2] && s4[2] > s4[3];
-        if (inc) return 'X';
-        if (dec) return 'T';
-    }
-    return null;
-}
-
-function algo_cau_dao_3(results) {
-    if (results.length >= 6 && results[0] === results[2] && results[1] === results[3] && results[2] === results[4] && results[3] === results[5] && results[0] !== results[1]) {
-        return results[0] === 'T' ? 'X' : 'T';
-    }
-    return null;
-}
-
-function algo_song_nguoc(results) {
-    if (results.length >= 7 && results[0] !== results[1] && results[1] !== results[2] && results[2] !== results[3] && results[3] !== results[4] && results[4] !== results[5] && results[5] !== results[6]) {
-        return results[0] === 'T' ? 'X' : 'T';
-    }
-    return null;
-}
-
-function algo_rs7(data) {
-    if (data.length >= 7) {
-        const totals = data.slice(0, 7).map(d => d.Tong);
-        const avg7 = totals.reduce((a, b) => a + b, 0) / 7;
-        const std = Math.sqrt(totals.reduce((s, t) => s + Math.pow(t - avg7, 2), 0) / 7);
-        if (std < 1.2) return data[0].Ket_qua === 'Tài' ? 'X' : 'T';
-        if (std > 4.5) return data[0].Ket_qua === 'Tài' ? 'T' : 'X';
-    }
-    return null;
-}
-
-function algo_rsi(results) {
-    if (results.length < 8) return null;
-    const nums = results.slice(0, 8).map(c => c === 'T' ? 1 : 0);
-    let gains = 0, losses = 0;
-    for (let i = 1; i < nums.length; i++) {
-        const diff = nums[i] - nums[i - 1];
-        if (diff > 0) gains += diff; else losses -= diff;
-    }
-    const avgGain = gains / 8, avgLoss = losses / 8;
-    if (avgLoss === 0) return 'T';
-    const rsi = 100 - (100 / (1 + avgGain / avgLoss));
-    if (rsi > 75) return 'X';
-    if (rsi < 25) return 'T';
-    return null;
-}
-
-function algo_decision_tree(results) {
-    if (results.length < 10) return null;
-    const last1 = results[0], last2 = results[1], last3 = results[2];
-    const t5 = results.slice(0, 5).filter(c => c === 'T').length;
-    if (last1 === 'T' && last2 === 'T' && last3 === 'T') return 'X';
-    if (last1 === 'X' && last2 === 'X' && last3 === 'X') return 'T';
-    if (t5 >= 4) return 'X';
-    if (t5 <= 1) return 'T';
-    return last1;
-}
-
-function algo_pattern_matching(results) {
-    if (results.length < 20) return null;
-    const query = results.slice(-20).join('');
-    let bestMatch = -1, bestScore = -1;
-    for (let i = 0; i < results.length - 21; i++) {
-        let score = 0;
-        for (let j = 0; j < 20; j++) if (results[i + j] === query[j]) score++;
-        if (score > bestScore) { bestScore = score; bestMatch = i; }
-    }
-    if (bestMatch !== -1 && bestMatch + 20 < results.length) return results[bestMatch + 20];
-    return null;
-}
-
-function algo_fibonacci(data) {
-    if (data.length < 12) return null;
-    const totals = data.slice(0, 12).map(d => d.Tong);
-    const diffs = [];
-    for (let i = 1; i < totals.length; i++) diffs.push(totals[i] - totals[i - 1]);
-    const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
-    let nextTotal = totals[0] + avgDiff;
-    nextTotal = Math.min(18, Math.max(3, Math.round(nextTotal)));
-    return nextTotal > 10 ? 'T' : 'X';
-}
-
-function algo_entropy(results) {
-    if (results.length < 12) return null;
-    const p_t = results.filter(r => r === 'T').length / results.length;
-    if (p_t === 0 || p_t === 1) return results[results.length - 1];
-    const e = -p_t * Math.log2(p_t) - (1 - p_t) * Math.log2(1 - p_t);
-    if (e > 0.95) return results[results.length - 1] === 'T' ? 'X' : 'T';
-    return results[results.length - 1];
-}
-
-function algo_knn(results) {
-    if (results.length < 15) return null;
-    const query = results.slice(-10).join('');
-    const distances = [];
-    for (let i = 0; i < results.length - 11; i++) {
-        let dist = 0;
-        for (let j = 0; j < 10; j++) if (results[i + j] !== query[j]) dist++;
-        distances.push({ dist, next: results[i + 10] });
-    }
-    distances.sort((a, b) => a.dist - b.dist);
-    const neighbors = distances.slice(0, 5).map(d => d.next);
-    const tCount = neighbors.filter(n => n === 'T').length;
-    return tCount > 2 ? 'T' : 'X';
-}
-
-function algo_linear_regression(data) {
-    if (data.length < 10) return null;
-    const y = data.slice(0, 10).map(d => d.Tong);
-    const x = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-    const n = 10;
-    const sumX = x.reduce((a, b) => a + b, 0);
-    const sumY = y.reduce((a, b) => a + b, 0);
-    const sumXY = x.reduce((s, xi, i) => s + xi * y[i], 0);
-    const sumX2 = x.reduce((s, xi) => s + xi * xi, 0);
-    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-    if (slope > 0.3) return 'T';
-    if (slope < -0.3) return 'X';
-    return null;
-}
-
-function algo_bollinger(data) {
-    if (data.length < 12) return null;
-    const totals = data.slice(0, 12).map(d => d.Tong);
-    const mean = totals.reduce((a, b) => a + b, 0) / 12;
-    const variance = totals.reduce((s, t) => s + Math.pow(t - mean, 2), 0) / 12;
-    const std = Math.sqrt(variance);
-    const last = totals[0];
-    if (last > mean + 2 * std) return 'X';
-    if (last < mean - 2 * std) return 'T';
-    return null;
-}
-
-function algo_macd(data) {
-    if (data.length < 13) return null;
-    const nums = data.slice(0, 13).map(d => d.Ket_qua === 'Tài' ? 1 : 0);
-    const ema6 = nums.slice(0, 6).reduce((a, b) => a + b, 0) / 6;
-    const ema13 = nums.reduce((a, b) => a + b, 0) / 13;
-    const macd = ema6 - ema13;
-    if (macd > 0.1) return 'T';
-    if (macd < -0.1) return 'X';
-    return null;
-}
-
-function algo_stochastic(data) {
-    if (data.length < 7) return null;
-    const totals = data.slice(0, 7).map(d => d.Tong);
-    const highest = Math.max(...totals);
-    const lowest = Math.min(...totals);
-    if (highest === lowest) return null;
-    const k = (totals[0] - lowest) / (highest - lowest) * 100;
-    if (k > 80) return 'X';
-    if (k < 20) return 'T';
-    return null;
-}
-
-// ==================== 2. LỚP DỰ ĐOÁN CHÍNH ====================
-class EliteAI {
-    constructor() {
-        this.algorithms = [
-            { fn: algo_bet, weight: 1.8, name: 'Bệt' },
-            { fn: algo_11, weight: 1.5, name: '1-1' },
-            { fn: algo_22, weight: 1.3, name: '2-2' },
-            { fn: algo_33, weight: 1.3, name: '3-3' },
-            { fn: algo_triangle, weight: 1.5, name: 'Tam giác' },
-            { fn: algo_zigzag, weight: 1.4, name: 'Zigzag' },
-            { fn: algo_symmetry, weight: 1.2, name: 'Đối xứng' },
-            { fn: algo_score_low, weight: 2.2, name: 'Điểm cực thấp' },
-            { fn: algo_triple_dice, weight: 2.0, name: '3 mặt giống' },
-            { fn: algo_pair1, weight: 1.7, name: 'Cặp 1' },
-            { fn: algo_pair6, weight: 1.7, name: 'Cặp 6' },
-            { fn: algo_sum_trend, weight: 1.5, name: 'Xu hướng tổng' },
-            { fn: algo_markov, weight: 1.5, name: 'Markov' },
-            { fn: algo_distribution, weight: 1.3, name: 'Phân bố' },
-            { fn: algo_streak, weight: 1.6, name: 'Streak' },
-            { fn: algo_freq, weight: 1.3, name: 'Tần suất' },
-            { fn: algo_cycle, weight: 1.2, name: 'Chu kỳ' },
-            { fn: algo_reverse_last, weight: 0.7, name: 'Đảo phiên trước' },
-            { fn: algo_follow_last, weight: 0.7, name: 'Theo phiên trước' },
-            { fn: algo_121, weight: 1.4, name: '1-2-1' },
-            { fn: algo_123, weight: 1.4, name: '1-2-3' },
-            { fn: algo_321, weight: 1.4, name: '3-2-1' },
-            { fn: algo_212, weight: 1.3, name: '2-1-2' },
-            { fn: algo_1221, weight: 1.2, name: '1-2-2-1' },
-            { fn: algo_2112, weight: 1.2, name: '2-1-1-2' },
-            { fn: algo_dragon, weight: 1.7, name: 'Rồng' },
-            { fn: algo_tiger, weight: 1.7, name: 'Hổ' },
-            { fn: algo_day_gay, weight: 1.6, name: 'Dây gãy' },
-            { fn: algo_bac_thang, weight: 1.3, name: 'Bậc thang' },
-            { fn: algo_cau_dao_3, weight: 1.3, name: 'Đảo 3' },
-            { fn: algo_song_nguoc, weight: 1.2, name: 'Sóng ngược' },
-            { fn: algo_rs7, weight: 1.4, name: 'RS7' },
-            { fn: algo_rsi, weight: 1.3, name: 'RSI' },
-            { fn: algo_decision_tree, weight: 1.4, name: 'Decision Tree' },
-            { fn: algo_pattern_matching, weight: 1.2, name: 'Pattern Matching' },
-            { fn: algo_fibonacci, weight: 1.3, name: 'Fibonacci' },
-            { fn: algo_entropy, weight: 1.3, name: 'Entropy' },
-            { fn: algo_knn, weight: 1.2, name: 'KNN' },
-            { fn: algo_linear_regression, weight: 1.3, name: 'Linear Regression' },
-            { fn: algo_bollinger, weight: 1.3, name: 'Bollinger' },
-            { fn: algo_macd, weight: 1.2, name: 'MACD' },
-            { fn: algo_stochastic, weight: 1.2, name: 'Stochastic' },
-        ];
-        this.performance = {}; // { algoName: { correct, total } }
-        this.consecutiveLosses = 0;
-        this.lastPred = null;
-    }
-
-    predict(freshData) {
-        if (freshData.length < 10) {
-            return { action: 'CÂN NHẮC', prediction: 'Tài', confidence: 51 };
-        }
-
-        const results = freshData.map(d => d.Ket_qua === 'Tài' ? 'T' : 'X');
-        const signals = [];
-
-        this.algorithms.forEach(algo => {
-            try {
-                const pred = algo.fn.length === 1 ? algo.fn(results) : algo.fn(freshData);
-                if (pred) {
-                    // Điều chỉnh weight dựa trên hiệu suất gần đây
-                    let adjustedWeight = algo.weight;
-                    const perf = this.performance[algo.name];
-                    if (perf && perf.total >= 10) {
-                        const acc = perf.correct / perf.total;
-                        if (acc < 0.35) return; // Bỏ qua thuật toán yếu
-                        adjustedWeight = algo.weight * (0.5 + acc);
-                    }
-                    signals.push({ prediction: pred, weight: adjustedWeight, name: algo.name });
+        
+        if (matches.length >= 2) {
+            const weights = { T: 0, X: 0 };
+            let totalWeight = 0;
+            
+            for (const match of matches) {
+                const weight = 1 / (match.distance * 0.5 + 1);
+                weights[match.next] += weight;
+                totalWeight += weight;
+            }
+            
+            if (totalWeight > 0) {
+                const tRatio = weights.T / totalWeight;
+                const xRatio = weights.X / totalWeight;
+                const confidence = Math.abs(tRatio - xRatio);
+                
+                if (confidence > bestConfidence) {
+                    bestConfidence = confidence;
+                    bestPred = weights.T > weights.X ? 'T' : 'X';
                 }
+            }
+        }
+    }
+    return bestConfidence > 0.3 ? bestPred : null;
+}
+
+function algoS_NeoPattern(history) {
+    if (history.length < 25) return null;
+    const features = extractFeatures(history);
+    const { runs, tx } = features;
+    
+    const patternType = detectPatternType(runs);
+    if (!patternType || patternType === 'random_pattern') return null;
+    
+    const lastTx = tx[tx.length - 1];
+    const prediction = predictNextFromPattern(patternType, runs, lastTx);
+    
+    if (prediction) {
+        const recentRuns = runs.slice(-Math.min(8, runs.length));
+        const patternConsistency = recentRuns.filter(r => 
+            patternType.includes('_pattern') || 
+            (patternType === 'long_run_pattern' && r.len >= 4)
+        ).length / recentRuns.length;
+        
+        if (patternConsistency > 0.6) return prediction;
+    }
+    return null;
+}
+
+function algoF_SuperDeepAnalysis(history) {
+    if (history.length < 60) return null;
+    
+    const timeframes = [
+        { lookback: 10, weight: 0.3 },
+        { lookback: 30, weight: 0.4 },
+        { lookback: 60, weight: 0.3 }
+    ];
+    
+    let totalScore = { T: 0, X: 0 };
+    let totalWeight = 0;
+    
+    for (const tf of timeframes) {
+        if (history.length < tf.lookback) continue;
+        
+        const slice = history.slice(-tf.lookback);
+        const sliceTx = slice.map(h => h.tx);
+        const sliceTotals = slice.map(h => h.total);
+        
+        const tCount = sliceTx.filter(t => t === 'T').length;
+        const xCount = sliceTx.filter(t => t === 'X').length;
+        const meanTotal = avg(sliceTotals);
+        const volatility = Math.sqrt(avg(sliceTotals.map(t => Math.pow(t - meanTotal, 2))));
+        
+        let tScore = 0, xScore = 0;
+        
+        if (meanTotal > 12) xScore += 0.4;
+        if (meanTotal < 9) tScore += 0.4;
+        
+        if (tCount > xCount + 3) xScore += 0.3;
+        if (xCount > tCount + 3) tScore += 0.3;
+        
+        if (volatility > 4) {
+            if (sliceTx[sliceTx.length - 1] === 'T') tScore += 0.2;
+            else xScore += 0.2;
+        }
+        
+        const trend = sliceTotals[sliceTotals.length - 1] - sliceTotals[0];
+        if (trend > 3) xScore += 0.1;
+        if (trend < -3) tScore += 0.1;
+        
+        const timeframeWeight = tf.weight * (sliceTx.length / tf.lookback);
+        totalScore.T += tScore * timeframeWeight;
+        totalScore.X += xScore * timeframeWeight;
+        totalWeight += timeframeWeight;
+    }
+    
+    if (totalWeight > 0 && Math.abs(totalScore.T - totalScore.X) > 0.15) {
+        return totalScore.T > totalScore.X ? 'T' : 'X';
+    }
+    return null;
+}
+
+function algoE_Transformer(history) {
+    if (history.length < 100) return null;
+    const tx = history.map(h => h.tx);
+    
+    const seqLengths = [6, 8, 10, 12];
+    let attentionScores = { T: 0, X: 0 };
+    
+    for (const seqLen of seqLengths) {
+        if (tx.length < seqLen * 2) continue;
+        
+        const targetSeq = tx.slice(-seqLen).join('');
+        let seqMatches = 0;
+        
+        for (let i = 0; i <= tx.length - seqLen - 1; i++) {
+            const historySeq = tx.slice(i, i + seqLen).join('');
+            const matchScore = similarity(historySeq, targetSeq);
+            
+            if (matchScore >= 0.7) {
+                const nextResult = tx[i + seqLen];
+                const recency = 1 / (tx.length - i);
+                const lengthFactor = seqLen / 12;
+                const weight = matchScore * recency * lengthFactor;
+                
+                attentionScores[nextResult] = (attentionScores[nextResult] || 0) + weight;
+                seqMatches++;
+            }
+        }
+        
+        if (seqMatches >= 3) {
+            const boostFactor = Math.min(1.5, seqMatches / 2);
+            attentionScores.T *= boostFactor;
+            attentionScores.X *= boostFactor;
+        }
+    }
+    
+    if (attentionScores.T + attentionScores.X > 0.2) {
+        const total = attentionScores.T + attentionScores.X;
+        const confidence = Math.abs(attentionScores.T - attentionScores.X) / total;
+        if (confidence > 0.25) {
+            return attentionScores.T > attentionScores.X ? 'T' : 'X';
+        }
+    }
+    return null;
+}
+
+function algoG_SuperBridgePredictor(history) {
+    const features = extractFeatures(history);
+    const { runs, tx } = features;
+    
+    if (runs.length < 4) return null;
+    
+    const lastRun = runs[runs.length - 1];
+    
+    let prediction = null;
+    let confidence = 0;
+    
+    if (lastRun.len >= 5) {
+        if (lastRun.len >= 8) {
+            prediction = lastRun.val === 'T' ? 'X' : 'T';
+            confidence = 0.8;
+        } else if (lastRun.len >= 5 && lastRun.len <= 7) {
+            const avgRunLength = avg(runs.map(r => r.len));
+            if (lastRun.len > avgRunLength * 1.8) {
+                prediction = lastRun.val === 'T' ? 'X' : 'T';
+                confidence = 0.65;
+            } else {
+                prediction = lastRun.val;
+                confidence = 0.6;
+            }
+        }
+    }
+    
+    if (!prediction && runs.length >= 5) {
+        const last5Runs = runs.slice(-5);
+        const lengths = last5Runs.map(r => r.len);
+        
+        if (lengths[0] === 1 && lengths[1] === 1 && lengths[2] >= 3) {
+            if (lastRun.len >= 3) {
+                prediction = lastRun.val === 'T' ? 'X' : 'T';
+                confidence = 0.7;
+            }
+        }
+        
+        if (lengths.length >= 4) {
+            if (lengths[0] === 2 && lengths[1] === 3 && lengths[2] === 2 && lengths[3] === 3) {
+                prediction = lastRun.val === 'T' ? 'T' : 'X';
+                confidence = 0.6;
+            }
+        }
+    }
+    
+    if (!prediction && runs.length >= 8) {
+        const recentRuns = runs.slice(-8);
+        const runLengths = recentRuns.map(r => r.len);
+        const currentRunLength = lastRun.len;
+        const meanLength = avg(runLengths);
+        const stdLength = Math.sqrt(avg(runLengths.map(l => Math.pow(l - meanLength, 2))));
+        
+        if (currentRunLength > meanLength + (stdLength * 1.5)) {
+            prediction = lastRun.val === 'T' ? 'X' : 'T';
+            confidence = 0.6;
+        }
+    }
+    
+    return confidence > 0.55 ? prediction : null;
+}
+
+function algoH_AdaptiveMarkov(history) {
+    if (history.length < 25) return null;
+    const tx = history.map(h => h.tx);
+    
+    const models = [
+        { type: 'markov', orders: [2, 3, 4] },
+        { type: 'frequency', lookbacks: [10, 20, 30] },
+        { type: 'momentum', windows: [5, 10, 15] }
+    ];
+    
+    let ensembleVotes = { T: 0, X: 0 };
+    
+    for (const model of models) {
+        if (model.type === 'markov') {
+            for (const order of model.orders) {
+                if (tx.length < order + 5) continue;
+                
+                const transitions = {};
+                for (let i = 0; i <= tx.length - order - 1; i++) {
+                    const key = tx.slice(i, i + order).join('');
+                    const next = tx[i + order];
+                    if (!transitions[key]) transitions[key] = { T: 0, X: 0 };
+                    transitions[key][next]++;
+                }
+                
+                const lastKey = tx.slice(-order).join('');
+                const counts = transitions[lastKey];
+                if (counts && counts.T + counts.X >= 2) {
+                    const pred = counts.T > counts.X ? 'T' : 'X';
+                    const confidence = Math.abs(counts.T - counts.X) / (counts.T + counts.X);
+                    ensembleVotes[pred] += confidence * (order / 10);
+                }
+            }
+        }
+        
+        if (model.type === 'frequency') {
+            for (const lookback of model.lookbacks) {
+                if (tx.length < lookback) continue;
+                
+                const recent = tx.slice(-lookback);
+                const tCount = recent.filter(t => t === 'T').length;
+                const xCount = recent.filter(t => t === 'X').length;
+                
+                if (Math.abs(tCount - xCount) > lookback * 0.2) {
+                    const pred = tCount > xCount ? 'X' : 'T';
+                    const confidence = Math.abs(tCount - xCount) / lookback;
+                    ensembleVotes[pred] += confidence * 0.5;
+                }
+            }
+        }
+        
+        if (model.type === 'momentum') {
+            for (const window of model.windows) {
+                if (tx.length < window * 2) continue;
+                
+                const firstHalf = tx.slice(-window * 2, -window);
+                const secondHalf = tx.slice(-window);
+                
+                const firstT = firstHalf.filter(t => t === 'T').length;
+                const firstX = firstHalf.filter(t => t === 'X').length;
+                const secondT = secondHalf.filter(t => t === 'T').length;
+                const secondX = secondHalf.filter(t => t === 'X').length;
+                
+                const momentumT = secondT - firstT;
+                const momentumX = secondX - firstX;
+                
+                if (Math.abs(momentumT - momentumX) > window * 0.3) {
+                    const pred = momentumT > momentumX ? 'T' : 'X';
+                    const confidence = Math.abs(momentumT - momentumX) / window;
+                    ensembleVotes[pred] += confidence * 0.3;
+                }
+            }
+        }
+    }
+    
+    if (ensembleVotes.T + ensembleVotes.X > 0.3) {
+        return ensembleVotes.T > ensembleVotes.X ? 'T' : 'X';
+    }
+    return null;
+}
+
+function algoI_PatternMaster(history) {
+    if (history.length < 35) return null;
+    const features = extractFeatures(history);
+    const { runs, tx } = features;
+    
+    if (runs.length < 5) return null;
+    
+    const recentRuns = runs.slice(-Math.min(8, runs.length));
+    const runLengths = recentRuns.map(r => r.len);
+    const runValues = recentRuns.map(r => r.val);
+    
+    let patternStrength = { T: 0, X: 0 };
+    
+    const runPattern = runLengths.join('');
+    const valuePattern = runValues.join('');
+    
+    const patternLibrary = [
+        { pattern: '12121', prediction: valuePattern[valuePattern.length-1] === 'T' ? 'X' : 'T', strength: 0.7 },
+        { pattern: '21212', prediction: valuePattern[valuePattern.length-1] === 'T' ? 'T' : 'X', strength: 0.7 },
+        { pattern: '13131', prediction: valuePattern[valuePattern.length-1], strength: 0.6 },
+        { pattern: '31313', prediction: valuePattern[valuePattern.length-1] === 'T' ? 'X' : 'T', strength: 0.6 },
+        { pattern: '24242', prediction: valuePattern[valuePattern.length-1] === 'T' ? 'X' : 'T', strength: 0.65 },
+        { pattern: '42424', prediction: valuePattern[valuePattern.length-1], strength: 0.65 }
+    ];
+    
+    for (const libPattern of patternLibrary) {
+        if (runPattern.includes(libPattern.pattern)) {
+            patternStrength[libPattern.prediction] += libPattern.strength;
+        }
+    }
+    
+    const last10Tx = tx.slice(-10).join('');
+    const txPatterns = [
+        { pattern: 'TXTXTXTX', prediction: 'X', strength: 0.8 },
+        { pattern: 'XTXTXTXT', prediction: 'T', strength: 0.8 },
+        { pattern: 'TTXXTTXX', prediction: 'X', strength: 0.7 },
+        { pattern: 'XXTTXXTT', prediction: 'T', strength: 0.7 },
+        { pattern: 'TTTXXXTT', prediction: 'T', strength: 0.75 },
+        { pattern: 'XXXTTTXX', prediction: 'X', strength: 0.75 },
+        { pattern: 'TTXTTXTT', prediction: 'X', strength: 0.7 },
+        { pattern: 'XXTXXTXX', prediction: 'T', strength: 0.7 }
+    ];
+    
+    for (const txPattern of txPatterns) {
+        if (last10Tx.includes(txPattern.pattern)) {
+            patternStrength[txPattern.prediction] += txPattern.strength;
+        }
+    }
+    
+    const lastRun = recentRuns[recentRuns.length - 1];
+    if (lastRun) {
+        const avgRecentLength = avg(runLengths);
+        const currentRunAge = lastRun.len;
+        
+        if (currentRunAge > avgRecentLength * 1.8) {
+            patternStrength[lastRun.val === 'T' ? 'X' : 'T'] += 0.5;
+        } else if (currentRunAge < avgRecentLength * 0.6) {
+            patternStrength[lastRun.val] += 0.4;
+        }
+    }
+    
+    if (patternStrength.T > 0 || patternStrength.X > 0) {
+        const totalStrength = patternStrength.T + patternStrength.X;
+        const confidence = Math.abs(patternStrength.T - patternStrength.X) / totalStrength;
+        if (confidence > 0.3) {
+            return patternStrength.T > patternStrength.X ? 'T' : 'X';
+        }
+    }
+    return null;
+}
+
+function algoJ_QuantumEntropy(history) {
+    if (history.length < 40) return null;
+    const features = extractFeatures(history);
+    const { entropy: e, tx, runs } = features;
+    
+    const entropyWindows = [10, 20, 30];
+    let entropyPredictions = { T: 0, X: 0 };
+    
+    for (const window of entropyWindows) {
+        if (tx.length < window) continue;
+        
+        const windowTx = tx.slice(-window);
+        const windowEntropy = entropy(windowTx);
+        
+        if (windowEntropy < 0.3) {
+            const lastVal = windowTx[windowTx.length - 1];
+            entropyPredictions[lastVal] += 0.6;
+        } else if (windowEntropy > 0.9) {
+            const tCount = windowTx.filter(t => t === 'T').length;
+            const xCount = windowTx.filter(t => t === 'X').length;
+            if (tCount > xCount) entropyPredictions['X'] += 0.5;
+            else if (xCount > tCount) entropyPredictions['T'] += 0.5;
+        } else {
+            const recentRuns = runs.slice(-4);
+            if (recentRuns.length >= 3) {
+                const runLengths = recentRuns.map(r => r.len);
+                const isEmergingPattern = Math.max(...runLengths) - Math.min(...runLengths) <= 2;
+                if (isEmergingPattern) {
+                    const lastVal = tx[tx.length - 1];
+                    entropyPredictions[lastVal] += 0.4;
+                }
+            }
+        }
+    }
+    
+    if (e < 0.4) {
+        const lastVal = tx[tx.length - 1];
+        entropyPredictions[lastVal] += 0.3;
+    } else if (e > 0.95) {
+        const recentT = tx.slice(-20).filter(t => t === 'T').length;
+        const recentX = tx.slice(-20).filter(t => t === 'X').length;
+        if (recentT > recentX) entropyPredictions['X'] += 0.4;
+        else if (recentX > recentT) entropyPredictions['T'] += 0.4;
+    }
+    
+    if (entropyPredictions.T + entropyPredictions.X > 0.4) {
+        return entropyPredictions.T > entropyPredictions.X ? 'T' : 'X';
+    }
+    return null;
+}
+
+// --- DANH SÁCH THUẬT TOÁN ---
+const ALL_ALGS = [
+    { id: 'algo5_freqrebalance', fn: algo5_freqRebalance },
+    { id: 'a_markov', fn: algoA_markov },
+    { id: 'b_ngram', fn: algoB_ngram },
+    { id: 's_neo_pattern', fn: algoS_NeoPattern },
+    { id: 'f_super_deep_analysis', fn: algoF_SuperDeepAnalysis },
+    { id: 'e_transformer', fn: algoE_Transformer },
+    { id: 'g_super_bridge_predictor', fn: algoG_SuperBridgePredictor },
+    { id: 'h_adaptive_markov', fn: algoH_AdaptiveMarkov },
+    { id: 'i_pattern_master', fn: algoI_PatternMaster },
+    { id: 'j_quantum_entropy', fn: algoJ_QuantumEntropy }
+];
+
+// --- ENSEMBLE CLASSIFIER ---
+class SEIUEnsemble {
+    constructor(algorithms, opts = {}) {
+        this.algs = algorithms;
+        this.weights = {};
+        this.emaAlpha = opts.emaAlpha ?? 0.06;
+        this.minWeight = opts.minWeight ?? 0.01;
+        this.historyWindow = opts.historyWindow ?? 700;
+        this.performanceHistory = {};
+        this.patternMemory = {};
+        
+        for (const a of algorithms) {
+            this.weights[a.id] = 1.0;
+            this.performanceHistory[a.id] = [];
+        }
+    }
+    
+    fitInitial(history) {
+        const window = lastN(history, Math.min(this.historyWindow, history.length));
+        if (window.length < 30) return;
+        
+        const algScores = {};
+        for (const a of this.algs) algScores[a.id] = 0;
+        
+        const evalSamples = Math.min(40, window.length - 15);
+        const startIdx = window.length - evalSamples;
+        
+        for (let i = Math.max(15, startIdx); i < window.length; i++) {
+            const prefix = window.slice(0, i);
+            const actual = window[i].tx;
+            const features = extractFeatures(prefix);
+            const patternType = detectPatternType(features.runs);
+            
+            for (const a of this.algs) {
+                try {
+                    const pred = a.fn(prefix);
+                    if (pred && pred === actual) {
+                        algScores[a.id] += 1;
+                        if (patternType) {
+                            const key = `${a.id}_${patternType}`;
+                            this.patternMemory[key] = (this.patternMemory[key] || 0) + 1;
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
+        
+        let totalWeight = 0;
+        for (const id in algScores) {
+            const score = algScores[id] || 0;
+            const accuracy = score / evalSamples;
+            const baseWeight = 0.3 + (accuracy * 0.7);
+            this.weights[id] = Math.max(this.minWeight, baseWeight);
+            totalWeight += this.weights[id];
+        }
+        
+        if (totalWeight > 0) {
+            for (const id in this.weights) {
+                this.weights[id] /= totalWeight;
+            }
+        }
+        
+        console.log(`⚖️ Đã khởi tạo trọng số cho ${Object.keys(this.weights).length} thuật toán.`);
+    }
+    
+    updateWithOutcome(historyPrefix, actualTx) {
+        if (historyPrefix.length < 10) return;
+        
+        const features = extractFeatures(historyPrefix);
+        const patternType = detectPatternType(features.runs);
+        
+        for (const a of this.algs) {
+            try {
+                const pred = a.fn(historyPrefix);
+                const correct = pred === actualTx ? 1 : 0;
+                
+                this.performanceHistory[a.id].push(correct);
+                if (this.performanceHistory[a.id].length > 60) {
+                    this.performanceHistory[a.id].shift();
+                }
+                
+                const recentPerf = lastN(this.performanceHistory[a.id], 25);
+                let weightedAccuracy = 0;
+                let weightSum = 0;
+                
+                for (let i = 0; i < recentPerf.length; i++) {
+                    const weight = Math.pow(0.9, recentPerf.length - i - 1);
+                    weightedAccuracy += recentPerf[i] * weight;
+                    weightSum += weight;
+                }
+                
+                const recentAccuracy = weightSum > 0 ? weightedAccuracy / weightSum : 0.5;
+                
+                let patternBonus = 0;
+                if (patternType) {
+                    const key = `${a.id}_${patternType}`;
+                    const patternSuccess = this.patternMemory[key] || 0;
+                    if (patternSuccess > 3) patternBonus = 0.1;
+                }
+                
+                const targetWeight = Math.min(1, recentAccuracy + patternBonus + 0.1);
+                const currentWeight = this.weights[a.id] || this.minWeight;
+                const newWeight = this.emaAlpha * targetWeight + (1 - this.emaAlpha) * currentWeight;
+                this.weights[a.id] = Math.max(this.minWeight, Math.min(1.5, newWeight));
+                
+                if (patternType && correct) {
+                    const key = `${a.id}_${patternType}`;
+                    this.patternMemory[key] = (this.patternMemory[key] || 0) + 1;
+                }
+            } catch (e) {
+                this.weights[a.id] = Math.max(this.minWeight, (this.weights[a.id] || 1) * 0.92);
+            }
+        }
+        
+        const sumWeights = Object.values(this.weights).reduce((s, w) => s + w, 0);
+        if (sumWeights > 0) {
+            for (const id in this.weights) {
+                this.weights[id] /= sumWeights;
+            }
+        }
+    }
+    
+    predict(history) {
+        if (history.length < 12) {
+            return { prediction: 'tài', confidence: 0.5, rawPrediction: 'T' };
+        }
+        
+        const features = extractFeatures(history);
+        const patternType = detectPatternType(features.runs);
+        
+        const votes = { T: 0, X: 0 };
+        const algorithmDetails = [];
+        
+        for (const a of this.algs) {
+            try {
+                const pred = a.fn(history);
+                if (!pred) continue;
+                
+                let weight = this.weights[a.id] || this.minWeight;
+                if (patternType) {
+                    const key = `${a.id}_${patternType}`;
+                    const patternSuccess = this.patternMemory[key] || 0;
+                    if (patternSuccess > 2) weight *= 1.2;
+                }
+                
+                votes[pred] = (votes[pred] || 0) + weight;
+                algorithmDetails.push({ algorithm: a.id, prediction: pred, weight });
             } catch (e) {}
-        });
-
-        if (signals.length === 0) {
-            const last = results[0];
-            return { action: 'CÂN NHẮC', prediction: last === 'T' ? 'Xỉu' : 'Tài', confidence: 51 };
         }
-
-        let sT = 0, sX = 0;
-        signals.forEach(s => {
-            if (s.prediction === 'T' || s.prediction === 'Tài') sT += s.weight;
-            else sX += s.weight;
-        });
-
-        // Chống kẹt 50%
-        if (sT === sX) {
-            const totalT = results.filter(r => r === 'T').length;
-            const totalX = results.length - totalT;
-            if (totalT > totalX) sT += 0.5; else sX += 0.5;
+        
+        if (votes.T === 0 && votes.X === 0) {
+            const fallback = algo5_freqRebalance(history) || 'T';
+            return { prediction: fallback === 'T' ? 'tài' : 'xỉu', confidence: 0.5, rawPrediction: fallback };
         }
-
-        const pred = sT >= sX ? 'Tài' : 'Xỉu';
-        let conf = Math.round(Math.max(sT, sX) / (sT + sX) * 100);
-        conf = Math.max(51, Math.min(92, conf));
-
-        this.lastPred = pred;
-        return { action: conf >= 65 ? 'ĐẶT' : 'CÂN NHẮC', prediction: pred, confidence: conf, signalCount: signals.length };
+        
+        const { key: best, val: bestVal } = majority(votes);
+        const totalVotes = votes.T + votes.X;
+        let baseConfidence = bestVal / totalVotes;
+        
+        let consensusBonus = 0;
+        const tAlgorithms = algorithmDetails.filter(a => a.prediction === 'T').length;
+        const xAlgorithms = algorithmDetails.filter(a => a.prediction === 'X').length;
+        const totalAlgorithms = tAlgorithms + xAlgorithms;
+        
+        if (totalAlgorithms > 0) {
+            const consensusRatio = Math.max(tAlgorithms, xAlgorithms) / totalAlgorithms;
+            if (consensusRatio > 0.7) consensusBonus = 0.1;
+            if (consensusRatio > 0.8) consensusBonus = 0.15;
+        }
+        
+        const confidence = Math.min(0.96, Math.max(0.55, baseConfidence + consensusBonus));
+        
+        return {
+            prediction: best === 'T' ? 'tài' : 'xỉu',
+            confidence,
+            rawPrediction: best
+        };
     }
+}
 
-    feedback(actual) {
-        const predTai = this.lastPred === 'Tài';
-        const actualTai = actual === 'Tài';
-        const correct = predTai === actualTai;
+// --- PATTERN ANALYSIS ---
+function getComplexPattern(history) {
+    const minHistory = 15;
+    if (history.length < minHistory) return "n/a";
+    const historyTx = history.map(h => h.tx);
+    return historyTx.slice(-minHistory).join('').toLowerCase();
+}
 
-        if (correct) this.consecutiveLosses = 0;
-        else this.consecutiveLosses++;
-
-        // Cập nhật hiệu suất cho các thuật toán đã dùng trong lần predict gần nhất
-        // (Được gọi từ bên ngoài với danh sách tên thuật toán)
-    }
-
-    updatePerformance(algoNames, correct) {
-        algoNames.forEach(name => {
-            if (!this.performance[name]) this.performance[name] = { correct: 0, total: 0 };
-            this.performance[name].total++;
-            if (correct) this.performance[name].correct++;
+// --- MANAGER CLASS ---
+class SEIUManager {
+    constructor(opts = {}) {
+        this.history = [];
+        this.ensemble = new SEIUEnsemble(ALL_ALGS, {
+            emaAlpha: opts.emaAlpha ?? 0.06,
+            historyWindow: opts.historyWindow ?? 700
         });
+        this.currentPrediction = null;
+        this.patternHistory = [];
     }
-
-    getStats() {
-        return { consecutiveLosses: this.consecutiveLosses, activeAlgos: Object.keys(this.performance).length };
+    
+    calculateInitialStats() {
+        const minStart = 20;
+        if (this.history.length < minStart) return;
+        
+        const trainSamples = Math.min(60, this.history.length - minStart);
+        const startIdx = this.history.length - trainSamples;
+        
+        for (let i = Math.max(minStart, startIdx); i < this.history.length; i++) {
+            const historyPrefix = this.history.slice(0, i);
+            const actualTx = this.history[i].tx;
+            this.ensemble.updateWithOutcome(historyPrefix, actualTx);
+        }
+        
+        console.log(`📊 AI đã huấn luyện trên ${trainSamples} mẫu.`);
+    }
+    
+    loadInitial(lines) {
+        this.history = lines;
+        this.ensemble.fitInitial(this.history);
+        this.calculateInitialStats();
+        this.currentPrediction = this.getPrediction();
+        
+        console.log("📦 Đã tải lịch sử. Hệ thống AI sẵn sàng.");
+        const nextSession = this.history.at(-1) ? this.history.at(-1).session + 1 : 'N/A';
+        console.log(`🔮 Dự đoán phiên ${nextSession}: ${this.currentPrediction.prediction} (${(this.currentPrediction.confidence * 100).toFixed(0)}%)`);
+    }
+    
+    pushRecord(record) {
+        this.history.push(record);
+        
+        if (this.history.length > 500) {
+            this.history = this.history.slice(-450);
+        }
+        
+        const prefix = this.history.slice(0, -1);
+        if (prefix.length >= 10) {
+            this.ensemble.updateWithOutcome(prefix, record.tx);
+        }
+        
+        this.currentPrediction = this.getPrediction();
+        
+        const features = extractFeatures(this.history);
+        const patternType = detectPatternType(features.runs);
+        if (patternType) {
+            this.patternHistory.push(patternType);
+            if (this.patternHistory.length > 20) this.patternHistory.shift();
+        }
+        
+        console.log(`📥 ${record.session} → ${record.result}. Dự đoán ${record.session + 1}: ${this.currentPrediction.prediction} (${(this.currentPrediction.confidence * 100).toFixed(0)}%)`);
+    }
+    
+    getPrediction() {
+        return this.ensemble.predict(this.history);
     }
 }
 
-// ==================== 3. SERVER ====================
-const predictorHU  = new EliteAI();
-const predictorMD5 = new EliteAI();
-let predictionHistory = { hu: [], md5: [] };
-let pendingPrediction  = { hu: null, md5: null };
-let lastAlgoNames = { hu: [], md5: [] }; // Lưu danh sách thuật toán đã dùng
+const seiuManager = new SEIUManager();
 
-function loadJSON(filename, defaultValue) {
-    try { if (fs.existsSync(filename)) return JSON.parse(fs.readFileSync(filename, 'utf8')); }
-    catch (e) { console.error(`Lỗi load ${filename}:`, e.message); }
-    return defaultValue;
-}
-
-function saveJSON(filename, data) {
-    try { fs.writeFileSync(filename, JSON.stringify(data, null, 2)); }
-    catch (e) { console.error(`Lỗi save ${filename}:`, e.message); }
-}
-
-function transformApiData(apiData) {
-    if (!apiData?.list?.length) return null;
-    return apiData.list.map(item => ({
-        Phien: item.id,
-        Ket_qua: item.resultTruyenThong === 'TAI' ? 'Tài' : 'Xỉu',
-        Xuc_xac_1: item.dices[0], Xuc_xac_2: item.dices[1], Xuc_xac_3: item.dices[2],
-        Tong: item.point, Thoi_gian: item.time || new Date().toISOString()
-    })).sort((a, b) => b.Phien - a.Phien);
-}
-
-async function fetchFreshData(url) {
+// --- FETCH FUNCTION ---
+async function fetchAndProcessHistory() {
     try {
-        const resp = await axios.get(url, { timeout: 15000, params: { limit: FRESH_SCAN_COUNT } });
-        return transformApiData(resp.data);
-    } catch (e) { console.error(`❌ Fetch lỗi:`, e.message); return null; }
-}
-
-function predictAndRecord(type, predictor, freshData) {
-    if (pendingPrediction[type]) return pendingPrediction[type];
-    if (freshData.length === 0) return null;
-    const latest = freshData[0].Phien;
-    const next = latest + 1;
-    const result = predictor.predict(freshData);
-    if (!result || result.action === 'BỎ QUA') return null;
-    const entry = { phien: next, du_doan: result.prediction.toLowerCase(), ket_qua: null, danh_gia: null };
-    predictionHistory[type].unshift(entry);
-    if (predictionHistory[type].length > MAX_HISTORY) predictionHistory[type] = predictionHistory[type].slice(0, MAX_HISTORY);
-    pendingPrediction[type] = { nextPhien: next, prediction: result.prediction, confidence: result.confidence, entry };
-    // Lưu danh sách thuật toán đã dùng (từ signals trong predict - cần sửa predict để trả về)
-    return pendingPrediction[type];
-}
-
-function updateActualResults(type, predictor, freshData) {
-    if (!freshData || !freshData.length) return;
-    for (let i = 0; i < predictionHistory[type].length; i++) {
-        const entry = predictionHistory[type][i];
-        if (entry.ket_qua !== null && entry.ket_qua !== undefined && entry.ket_qua !== '') continue;
-        const actualSession = freshData.find(s => s.Phien === entry.phien);
-        if (!actualSession) continue;
-        entry.ket_qua = actualSession.Ket_qua.toLowerCase();
-        const duDoan = entry.du_doan ? entry.du_doan.toLowerCase().trim() : '';
-        const ketQua = entry.ket_qua ? entry.ket_qua.toLowerCase().trim() : '';
-        entry.danh_gia = (duDoan === ketQua) ? 'thang' : 'thua';
-        predictor.feedback(actualSession.Ket_qua);
-        // Cập nhật hiệu suất thuật toán
-        const correct = duDoan === ketQua;
-        predictor.updatePerformance(lastAlgoNames[type], correct);
-        if (pendingPrediction[type] && pendingPrediction[type].entry === entry) pendingPrediction[type] = null;
+        const response = await axios.get(API_URL);
+        const data = response.data;
+        const newHistory = parseLines(data);
+        
+        if (newHistory.length === 0) {
+            console.log("⚠️ Không có dữ liệu từ API.");
+            return;
+        }
+        
+        const lastSessionInHistory = newHistory.at(-1);
+        
+        if (!currentSessionId) {
+            seiuManager.loadInitial(newHistory);
+            txHistory = newHistory;
+            currentSessionId = lastSessionInHistory.session;
+            console.log(`✅ Đã tải ${newHistory.length} phiên lịch sử.`);
+        } else if (lastSessionInHistory.session > currentSessionId) {
+            const newRecords = newHistory.filter(r => r.session > currentSessionId);
+            
+            for (const record of newRecords) {
+                seiuManager.pushRecord(record);
+                txHistory.push(record);
+            }
+            
+            if (txHistory.length > 350) {
+                txHistory = txHistory.slice(-300);
+            }
+            
+            currentSessionId = lastSessionInHistory.session;
+            if (newRecords.length > 0) {
+                console.log(`🆕 Cập nhật ${newRecords.length} phiên. Phiên cuối: ${currentSessionId}`);
+            }
+        }
+    } catch (e) {
+        console.error("❌ Lỗi fetch dữ liệu:", e.message);
     }
-    if (predictionHistory[type].length > MAX_HISTORY) predictionHistory[type] = predictionHistory[type].slice(0, MAX_HISTORY);
-    saveJSON(HISTORY_FILE, predictionHistory);
 }
 
-// Khởi tạo lịch sử từ file
-predictionHistory = loadJSON(HISTORY_FILE, { hu: [], md5: [] });
-
-app.get('/lc79-hu', async (req, res) => {
-    const freshData = await fetchFreshData(API_URL_HU);
-    if (!freshData || freshData.length < 10) {
-        return res.json({ status: 'error', message: 'Không đủ dữ liệu' });
+// --- API ENDPOINTS ---
+app.get("/api/taixiumd5/lc79", async (req, res) => {
+    const lastResult = txHistory.at(-1) || null;
+    const currentPrediction = seiuManager.currentPrediction;
+    const pattern = getComplexPattern(seiuManager.history);
+    
+    if (!lastResult || !currentPrediction) {
+        return res.json({
+            id: "AnhKhoicute",
+            phien_truoc: null,
+            xuc_xac1: null,
+            xuc_xac2: null,
+            xuc_xac3: null,
+            tong: null,
+            ket_qua: "đang chờ...",
+            pattern: "đang phân tích...",
+            phien_hien_tai: null,
+            du_doan: "chưa có",
+            do_tin_cay: "0%"
+        });
     }
-
-    updateActualResults('hu', predictorHU, freshData);
-    let pred = predictAndRecord('hu', predictorHU, freshData);
-    if (!pred) pred = { nextPhien: freshData[0].Phien + 1, prediction: 'Tài', confidence: 51 };
-
-    const latestSession = freshData[0];
-    const stats = predictorHU.getStats();
-    const recentHistory = predictionHistory.hu.filter(e => e.ket_qua !== null).slice(0, 10).map(e => ({ phien: e.phien, du_doan: e.du_doan, ket_qua: e.ket_qua, danh_gia: e.danh_gia }));
-    res.json({ phien_truoc: { Phien: latestSession.Phien, Xuc_xac_1: latestSession.Xuc_xac_1, Xuc_xac_2: latestSession.Xuc_xac_2, Xuc_xac_3: latestSession.Xuc_xac_3, Tong: latestSession.Tong, Ket_qua: latestSession.Ket_qua }, phien_hien_tai: { Phien: pred.nextPhien, Du_doan: pred.prediction, Do_tin_cay: `${pred.confidence}%` }, id: '@vuaoccac', stats, win_loss_table: recentHistory, full_history_count: predictionHistory.hu.length });
+    
+    res.json({
+        id: "AnhKhoizZz",
+        phien_truoc: lastResult.session,
+        xuc_xac1: lastResult.dice[0],
+        xuc_xac2: lastResult.dice[1],
+        xuc_xac3: lastResult.dice[2],
+        tong: lastResult.total,
+        ket_qua: lastResult.result.toLowerCase(),
+        pattern: pattern,
+        phien_hien_tai: lastResult.session + 1,
+        du_doan: currentPrediction.prediction,
+        do_tin_cay: `${(currentPrediction.confidence * 100).toFixed(0)}%`
+    });
 });
 
-app.get('/lc79-md5', async (req, res) => {
-    const freshData = await fetchFreshData(API_URL_MD5);
-    if (!freshData || freshData.length < 10) {
-        return res.json({ status: 'error', message: 'Không đủ dữ liệu' });
+app.get("/api/taixiumd5/history", async (req, res) => {
+    if (!txHistory.length) {
+        return res.json({ message: "không có dữ liệu lịch sử." });
     }
-
-    updateActualResults('md5', predictorMD5, freshData);
-    let pred = predictAndRecord('md5', predictorMD5, freshData);
-    if (!pred) pred = { nextPhien: freshData[0].Phien + 1, prediction: 'Tài', confidence: 51 };
-
-    const latestSession = freshData[0];
-    const stats = predictorMD5.getStats();
-    const recentHistory = predictionHistory.md5.filter(e => e.ket_qua !== null).slice(0, 10).map(e => ({ phien: e.phien, du_doan: e.du_doan, ket_qua: e.ket_qua, danh_gia: e.danh_gia }));
-    res.json({ phien_truoc: { Phien: latestSession.Phien, Xuc_xac_1: latestSession.Xuc_xac_1, Xuc_xac_2: latestSession.Xuc_xac_2, Xuc_xac_3: latestSession.Xuc_xac_3, Tong: latestSession.Tong, Ket_qua: latestSession.Ket_qua }, phien_hien_tai: { Phien: pred.nextPhien, Du_doan: pred.prediction, Do_tin_cay: `${pred.confidence}%` }, id: '@vuaoccac', stats, win_loss_table: recentHistory, full_history_count: predictionHistory.md5.length });
+    
+    const reversedHistory = [...txHistory].sort((a, b) => b.session - a.session);
+    res.json(reversedHistory.map(i => ({
+        session: i.session,
+        dice: i.dice,
+        total: i.total,
+        result: i.result.toLowerCase(),
+        tx_label: i.tx.toLowerCase()
+    })));
 });
 
-app.get('/lc79-hu/history', (req, res) => { res.json(predictionHistory.hu); });
-app.get('/lc79-md5/history', (req, res) => { res.json(predictionHistory.md5); });
-app.get('/status', (req, res) => { res.json({ hu: { stats: predictorHU.getStats() }, md5: { stats: predictorMD5.getStats() } }); });
+app.get("/", async (req, res) => {
+    res.json({
+        status: "ok",
+        msg: "AI Tài Xỉu MD5 Pro - Phiên bản Pattern Master",
+        version: "3.0",
+        algorithms: ALL_ALGS.length,
+        pattern_recognition: "nâng cao (15+ mẫu phức tạp)",
+        endpoints: [
+            "/api/taixiumd5/lc79",
+            "/api/taixiumd5/history"
+        ]
+    });
+});
 
-app.listen(PORT, '0.0.0.0', () => { console.log(`🚀 VuaOcCac Elite AI chạy tại cổng ${PORT}`); });
+// --- START SERVER ---
+async function start() {
+    // Khởi động fetch dữ liệu
+    await fetchAndProcessHistory();
+    fetchInterval = setInterval(fetchAndProcessHistory, 5000);
+    console.log(`🔄 Đang chạy với chu kỳ 5 giây.`);
+    
+    // Start server
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log("\n🚀 AI Tài Xỉu MD5 Pro - Pattern Master đã khởi động!");
+        console.log(`   ➜ Local:   http://localhost:${PORT}/`);
+        console.log(`   ➜ Network: http://0.0.0.0:${PORT}/\n`);
+        console.log("📌 Các API endpoints:");
+        console.log(`   ➜ GET /api/taixiumd5/lc79`);
+        console.log(`   ➜ GET /api/taixiumd5/history`);
+        console.log("\n🔧 Hệ thống AI Pattern Master với 10 thuật toán:");
+        ALL_ALGS.forEach((alg, i) => console.log(`   ${i+1}. ${alg.id}`));
+        console.log("\n🎯 Nhận diện 15+ mẫu cầu phức tạp:");
+        console.log("   • Cầu 1-1, 2-2, 3-3, 4-4");
+        console.log("   • Cầu 2-1-2, 1-2-1, 3-2-3, 4-2-4");
+        console.log("   • Cầu bệt dài, cầu ngắn, cầu đảo");
+        console.log("   • AI thích nghi theo cầu & bẻ cầu thông minh");
+    });
+}
+
+start();
